@@ -38,21 +38,88 @@ class L2Norm(nn.Module):
     def forward(self, x: Tensor, eps: float = 1e-6) -> Tensor:
         return x / (torch.norm(x, p=2, dim=1, keepdim=True) + eps).expand_as(x)
 
+    def get_jacobian(self, x: Tensor, val: Tensor, wrt='input'):
+        if wrt=='input':
+            return self._jacobian_wrt_input(x,val)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
+        ) -> Tensor:
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                jacobian = self._jacobian_wrt_input(x, val)
+                return torch.einsum("bij,bik,bkl->bjl", jacobian, tmp, jacobian)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                jacobian = self._jacobian_wrt_input(x, val)
+                return torch.einsum("bij,bi,bil->bjl", jacobian, tmp, jacobian)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                jacobian = self._jacobian_wrt_input(x, val)
+                return torch.einsum("bij,bik,bkj->bj", jacobian, tmp, jacobian)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                jacobian = self._jacobian_wrt_input(x, val)
+                return torch.einsum("bij,bi,bij->bj", jacobian, tmp, jacobian)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps, wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            tmp11, tmp12, tmp22 = tmps
+            if not diag_inp and not diag_out:
+                # full -> full
+                jacobian_1 = self.get_jacobian(
+                            x1, val1, wrt=wrt
+                        )
+                jacobian_2 = self.get_jacobian(
+                            x2, val2, wrt=wrt
+                        )
+                tmp11 = torch.einsum("bnm,bnj,bjk->bmk", jacobian_1, tmp11, jacobian_1)
+                tmp12 = torch.einsum("bnm,bnj,bjk->bmk", jacobian_1, tmp12, jacobian_2)
+                tmp22 = torch.einsum("bnm,bnj,bjk->bmk", jacobian_2, tmp22, jacobian_2)
+
+            elif diag_inp and not diag_out:
+                # diag -> full
+                jacobian_1 = self.get_jacobian(
+                            x1, val1, wrt=wrt
+                        )
+                jacobian_2 = self.get_jacobian(
+                            x2, val2, wrt=wrt
+                        )
+                tmp11 = torch.einsum("bnm,bn,bnk->bmk", jacobian_1, tmp11, jacobian_1)
+                tmp12 = torch.einsum("bnm,bn,bnk->bmk", jacobian_1, tmp12, jacobian_2)
+                tmp22 = torch.einsum("bnm,bn,bnk->bmk", jacobian_2, tmp22, jacobian_2)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                raise NotImplementedError
+            elif diag_inp and diag_out:
+                # diag -> diag
+                raise NotImplementedError
+            return [tmp11, tmp12, tmp22]
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return [None, None, None]
+    
+
     def _jacobian_wrt_input(self, x: Tensor, val: Tensor) -> Tensor:
         b, d = x.shape
-
         norm = torch.norm(x, p=2, dim=1)
 
-        out = torch.einsum("bi,bj->bij", x, x)
-        out = torch.einsum("b,bij->bij", 1 / (norm**3 + 1e-6), out)
-        out = (
-            torch.einsum(
-                "b,bij->bij", 1 / (norm + 1e-6), torch.diag(torch.ones(d, device=x.device)).expand(b, d, d)
-            )
-            - out
-        )
+        normalized_x = torch.einsum("b,bi->bi", 1 / (norm + 1e-6), x)
 
-        return out
+        jacobian = torch.einsum("bi,bj->bij", normalized_x, normalized_x)
+        jacobian = torch.diag(torch.ones(d, device=x.device)).expand(b, d, d) - jacobian
+        jacobian = torch.einsum("b,bij->bij", 1 / (norm + 1e-6), jacobian)
+
+        return jacobian
 
     def _jacobian_wrt_input_sandwich_full_to_full(self, x: Tensor, val: Tensor, tmp: Tensor) -> Tensor:
         jacobian = self._jacobian_wrt_input(x, val)
@@ -81,6 +148,19 @@ def identity(x: Tensor) -> Tensor:
 class Sequential(nn.Sequential):
     """Subclass of sequential that also supports calculating the jacobian through an network"""
 
+    def __init__(self, layers, add_hooks: bool = False):
+        super().__init__(*layers)
+        self._modules_list = list(self._modules.values())
+
+        self.add_hooks = add_hooks
+        if self.add_hooks:
+            self.feature_maps = []
+            self.handles = []
+            def fw_hook(module, input, output):
+                self.feature_maps.append(output.detach())
+            for k in range(len(self._modules)):
+                self.handles.append(self._modules_list[k].register_forward_hook(fw_hook))
+
     def forward(
         self, x: Tensor, jacobian: Union[Tensor, bool] = False
     ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
@@ -94,6 +174,141 @@ class Sequential(nn.Sequential):
         if not (jacobian is False):
             return x, j
         return x
+
+    def _jacobian_sandwich(
+        self, x: Tensor, tmp: Tensor, wrt = 'weight', diag_inp: bool = False, method = 'exact diagonal'
+        ) -> Tensor:
+        
+        #forward pass for computing hook values
+        self.feature_maps = []
+        self.forward(x)
+        self.feature_maps = [x] + self.feature_maps
+
+        #backward pass
+        GGN = []
+        for k in range(len(self._modules_list) - 1, -1, -1):
+            if method == 'block exact':
+                raise NotImplementedError
+            elif method == 'diagonal exact':
+                diag_inp = diag_inp if k==len(self._modules_list) - 1 else False
+                if wrt == 'weight':
+                    GGN_k = self._modules_list[k]._jacobian_sandwich(self.feature_maps[k],
+                                                             self.feature_maps[k+1], 
+                                                             tmp,
+                                                             wrt = 'weight',
+                                                             diag_inp = diag_inp,
+                                                             diag_out = True)
+                    if GGN_k is not None:
+                        GGN = [GGN_k] + GGN
+                    if k==0:
+                        break
+                tmp = self._modules_list[k]._jacobian_sandwich(self.feature_maps[k],
+                                                       self.feature_maps[k+1], 
+                                                       tmp,
+                                                       wrt = 'input',
+                                                       diag_inp = diag_inp,
+                                                       diag_out = False)
+            elif method == 'diagonal approx':
+                diag_inp = diag_inp if k==len(self._modules_list) - 1 else True
+                if wrt == 'weight':
+                    GGN_k = self._modules_list[k]._jacobian_sandwich(self.feature_maps[k],
+                                                             self.feature_maps[k+1], 
+                                                             tmp,
+                                                             wrt = 'weight',
+                                                             diag_inp = diag_inp,
+                                                             diag_out = True)
+                    if GGN_k is not None:
+                        GGN = [GGN_k] + GGN
+                    if k==0:
+                        break
+                tmp = self._modules_list[k]._jacobian_sandwich(self.feature_maps[k],
+                                                       self.feature_maps[k+1], 
+                                                       tmp,
+                                                       wrt = 'input',
+                                                       diag_inp = diag_inp,
+                                                       diag_out = True)
+        if method == 'diagonal exact' or method =='diagonal approx':
+            if wrt == 'weight':
+                GGN = torch.cat(GGN, dim=1)
+            elif wrt == 'input':
+                GGN = tmp
+            return GGN
+        else:
+            raise NotImplementedError
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, tmps, wrt = 'input', diag_inp: bool = True, method = 'diagonal exact'
+        ):
+        
+        #forward pass for computing hook values
+        self.feature_maps = []
+        self.forward(x1)
+        feature_maps_1 = [x1] + self.feature_maps
+
+        self.feature_maps = []
+        self.forward(x2)
+        feature_maps_2 = [x2] + self.feature_maps
+
+        #backward pass
+        GGN = []
+        for k in range(len(self._modules_list) - 1, -1, -1):
+            if method == 'block exact':
+                raise NotImplementedError
+            elif method == 'diagonal exact':
+                diag_inp = diag_inp if k==len(self._modules_list) - 1 else False
+                if wrt == 'weight':
+                    GGN_k = self._modules_list[k]._jacobian_sandwich_multipoint(feature_maps_1[k],
+                                                                                feature_maps_2[k],
+                                                                                feature_maps_1[k+1],
+                                                                                feature_maps_2[k+1],
+                                                                                tmps,
+                                                                                wrt = 'weight',
+                                                                                diag_inp = diag_inp,
+                                                                                diag_out = True)
+                    if GGN_k[0] is not None:
+                        GGN = [GGN_k[0] - 2 * GGN_k[1] + GGN_k[2]] + GGN
+                    if k==0:
+                        break
+                tmps = self._modules_list[k]._jacobian_sandwich_multipoint(feature_maps_1[k],
+                                                                            feature_maps_2[k],
+                                                                            feature_maps_1[k+1],
+                                                                            feature_maps_2[k+1],
+                                                                            tmps,
+                                                                            wrt = 'input',
+                                                                            diag_inp = diag_inp,
+                                                                            diag_out = False)
+            elif method == 'diagonal approx':
+                diag_inp = diag_inp if k==len(self._modules_list) - 1 else True
+                if wrt == 'weight':
+                    GGN_k = self._modules_list[k]._jacobian_sandwich_multipoint(feature_maps_1[k],
+                                                                                feature_maps_2[k],
+                                                                                feature_maps_1[k+1],
+                                                                                feature_maps_2[k+1],
+                                                                                tmps,
+                                                                                wrt = 'weight',
+                                                                                diag_inp = diag_inp,
+                                                                                diag_out = True)
+                    if GGN_k[0] is not None:
+                        GGN = [GGN_k[0] - 2 * GGN_k[1] + GGN_k[2]] + GGN
+                    if k==0:
+                        break
+                tmps = self._modules_list[k]._jacobian_sandwich_multipoint(feature_maps_1[k],
+                                                                            feature_maps_2[k],
+                                                                            feature_maps_1[k+1],
+                                                                            feature_maps_2[k+1],
+                                                                            tmps,
+                                                                            wrt = 'input',
+                                                                            diag_inp = diag_inp,
+                                                                            diag_out = True)
+        if method == 'diagonal exact' or method =='diagonal approx':
+            if wrt == 'weight':
+                GGN = torch.cat(GGN, dim=1)
+            elif wrt == 'input':
+                GGN = tmps[0] - 2 * tmps[1] + tmps[2]
+            return GGN
+        else:
+            raise NotImplementedError
+    
 
 
 class AbstractJacobian:
@@ -119,6 +334,117 @@ class Linear(AbstractJacobian, nn.Linear):
     def _jacobian_wrt_input_transpose_mult_left_vec(self, x: Tensor, val: Tensor, jac_in: Tensor) -> Tensor:
         return F.linear(jac_in.movedim(1, -1), self.weight.T, bias=None).movedim(-1, 1)
 
+    def get_jacobian(self, x: Tensor, val: Tensor, wrt='input'):
+        if wrt=='input':
+            return self._jacobian_wrt_input(x,val)
+        elif wrt=='weight':
+            return self._jacobian_wrt_weight(x,val)
+
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp, wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return torch.einsum("nm,bnj,jk->bmk", self.weight, tmp, self.weight)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                return torch.einsum("nm,bn,nk->bmk", self.weight, tmp, self.weight)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                return torch.einsum("nm,bnj,jm->bm", self.weight, tmp, self.weight)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return torch.einsum("nm,bn,nm->bm", self.weight, tmp, self.weight)
+        elif wrt=='weight':
+            if not diag_inp and not diag_out:
+                # full -> diag
+                # TODO: implement more effciently
+                return self._jacobian_wrt_weight_sandwich_full_to_full(x, val, tmp)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                # TODO: implement more effciently
+                return self._jacobian_wrt_weight_sandwich_diag_to_full(x, val, tmp)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                bs, _, _ = tmp.shape
+                if self.bias is None:
+                    return torch.einsum("bj,bii,bj->bij", x, tmp, x).view(bs, -1)
+                else:
+                    return torch.cat([torch.einsum("bj,bii,bj->bij", x, tmp, x).view(bs, -1), 
+                                      torch.einsum("bii->bi", tmp)], 
+                                dim=1)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                bs, _ = tmp.shape
+                if self.bias is None:
+                    return torch.einsum("bj,bi,bj->bij", x, tmp, x).view(bs, -1)
+                else:
+                    return torch.cat([torch.einsum("bj,bi,bj->bij", x, tmp, x).view(bs, -1), 
+                                      tmp], 
+                                dim=1)
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps, wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                return [torch.einsum("nm,bnj,jk->bmk", self.weight, tmp, self.weight) for tmp in tmps]
+            elif diag_inp and not diag_out:
+                return [torch.einsum("nm,bn,nk->bmk", self.weight, tmp_diag, self.weight) for tmp_diag in tmps]
+            elif not diag_inp and diag_out:
+                # full -> diag
+                return [torch.einsum("nm,bnj,jm->bm", self.weight, tmp, self.weight) for tmp in tmps]
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return [torch.einsum("nm,bn,nm->bm", self.weight, tmp_diag, self.weight) for tmp_diag in tmps]
+        elif wrt=='weight':
+            if not diag_inp and not diag_out:
+                # full -> full
+                raise NotImplementedError
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                tmp11, tmp12, tmp22 = tmps
+                bs, _, _ = tmp11.shape
+                if self.bias is None:
+                    diag_tmp11 = torch.einsum("bj,bii,bj->bij", x1, tmp11, x1).view(bs, -1)
+                    diag_tmp12 = torch.einsum("bj,bii,bj->bij", x1, tmp12, x2).view(bs, -1)
+                    diag_tmp22 = torch.einsum("bj,bii,bj->bij", x2, tmp22, x2).view(bs, -1)
+                else:
+                    diag_tmp11 = torch.cat([torch.einsum("bj,bii,bj->bij", x1, tmp11, x1).view(bs, -1), 
+                                            torch.einsum("bii->bi", tmp11)], 
+                                        dim=1)
+                    diag_tmp12 = torch.cat([torch.einsum("bj,bii,bj->bij", x1, tmp12, x2).view(bs, -1), 
+                                            torch.einsum("bii->bi", tmp12)], 
+                                        dim=1)
+                    diag_tmp22 = torch.cat([torch.einsum("bj,bii,bj->bij", x2, tmp22, x2).view(bs, -1), 
+                                            torch.einsum("bii->bi", tmp22)], 
+                                        dim=1)
+                return [diag_tmp11, diag_tmp12, diag_tmp22]
+            elif diag_inp and diag_out:
+                # diag -> diag
+                diag_tmp11, diag_tmp12, diag_tmp22 = tmps
+                bs, _= diag_tmp11.shape
+                if self.bias is None:
+                    diag_tmp11 = torch.einsum("bj,bi,bj->bij", x1, diag_tmp11, x1).view(bs, -1)
+                    diag_tmp12 = torch.einsum("bj,bi,bj->bij", x1, diag_tmp12, x2).view(bs, -1)
+                    diag_tmp22 = torch.einsum("bj,bi,bj->bij", x2, diag_tmp22, x2).view(bs, -1)
+                else:
+                    diag_tmp11 = torch.cat([torch.einsum("bj,bi,bj->bij", x1, diag_tmp11, x1).view(bs, -1), 
+                                            diag_tmp11], 
+                                        dim=1)
+                    diag_tmp12 = torch.cat([torch.einsum("bj,bi,bj->bij", x1, diag_tmp12, x2).view(bs, -1), 
+                                            diag_tmp12], 
+                                        dim=1)
+                    diag_tmp22 = torch.cat([torch.einsum("bj,bi,bj->bij", x2, diag_tmp22, x2).view(bs, -1), 
+                                            diag_tmp22], 
+                                        dim=1)
+                return [diag_tmp11, diag_tmp12, diag_tmp22]
+    
+    
     def _jacobian_wrt_input(self, x: Tensor, val: Tensor) -> Tensor:
         return self.weight
 
@@ -1096,6 +1422,82 @@ class ReLU(AbstractActivationJacobian, nn.ReLU):
         jac = (val > 0.0).type(val.dtype)
         return jac
 
+    def get_jacobian(self, x: Tensor, val: Tensor, wrt='input'):
+        if wrt=='input':
+            diag_jacobian = self._jacobian(x,val)
+            return torch.einsum("bi->bii",diag_jacobian)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
+        ) -> Tensor:
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                diag_jacobian = (val > 0.0).type(val.dtype)
+                return torch.einsum("bi,bik,bk->bik", diag_jacobian, tmp, diag_jacobian)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                diag_jacobian = (val > 0.0).type(val.dtype)
+                raise NotImplementedError
+                #return torch.einsum("bi,bi,bi->bii", diag_jacobian, tmp, diag_jacobian)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                diag_jacobian = (val > 0.0).type(val.dtype)
+                return torch.einsum("bi,bii,bi->bi", diag_jacobian, tmp, diag_jacobian)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                diag_jacobian = (val > 0.0).type(val.dtype)
+                return torch.einsum("bi,bi,bi->bi", diag_jacobian, tmp, diag_jacobian)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps, wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            tmp11, tmp12, tmp22 = tmps
+            if not diag_inp and not diag_out:
+                # full -> full
+                diag_jacobian_1 = (val1 > 0.0).type(val1.dtype)
+                diag_jacobian_2 = (val2 > 0.0).type(val2.dtype)
+
+                tmp11 = torch.einsum("bi,bik,bk->bik", diag_jacobian_1, tmp11, diag_jacobian_1)
+                tmp12 = torch.einsum("bi,bik,bk->bik", diag_jacobian_1, tmp12, diag_jacobian_2)
+                tmp22 = torch.einsum("bi,bik,bk->bik", diag_jacobian_2, tmp22, diag_jacobian_2)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                diag_jacobian_1 = (val1 > 0.0).type(val1.dtype)
+                diag_jacobian_2 = (val2 > 0.0).type(val2.dtype)
+
+                tmp11 = torch.einsum("bi,bi,bi->bii", diag_jacobian_1, tmp11, diag_jacobian_1)
+                tmp12 = torch.einsum("bi,bi,bi->bii", diag_jacobian_1, tmp12, diag_jacobian_2)
+                tmp22 = torch.einsum("bi,bi,bi->bii", diag_jacobian_2, tmp22, diag_jacobian_2)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                diag_jacobian_1 = (val1 > 0.0).type(val1.dtype)
+                diag_jacobian_2 = (val2 > 0.0).type(val2.dtype)
+
+                tmp11 = torch.einsum("bi,bii,bi->bi", diag_jacobian_1, tmp11, diag_jacobian_1)
+                tmp12 = torch.einsum("bi,bii,bi->bi", diag_jacobian_1, tmp12, diag_jacobian_2)
+                tmp22 = torch.einsum("bi,bii,bi->bi", diag_jacobian_2, tmp22, diag_jacobian_2)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                diag_jacobian_1 = (val1 > 0.0).type(val1.dtype)
+                diag_jacobian_2 = (val2 > 0.0).type(val2.dtype)
+
+                tmp11 = torch.einsum("bi,bi,bi->bi", diag_jacobian_1, tmp11, diag_jacobian_1)
+                tmp12 = torch.einsum("bi,bi,bi->bi", diag_jacobian_1, tmp12, diag_jacobian_2)
+                tmp22 = torch.einsum("bi,bi,bi->bi", diag_jacobian_2, tmp22, diag_jacobian_2)
+
+            return [tmp11, tmp12, tmp22]
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return [None, None, None]
+
 
 class PReLU(AbstractActivationJacobian, nn.PReLU):
     def _jacobian(self, x: Tensor, val: Tensor) -> Tensor:
@@ -1143,6 +1545,86 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
     def _jacobian(self, x: Tensor, val: Tensor) -> Tensor:
         jac = 1.0 - val**2
         return jac
+
+    def get_jacobian(self, x: Tensor, val: Tensor, wrt='input'):
+        if wrt=='input':
+            diag_jacobian = self._jacobian(x,val)
+            return torch.einsum("bi->bii", diag_jacobian)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
+        ) -> Tensor:
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+                return torch.einsum("bi,bik,bk->bik", diag_jacobian, tmp, diag_jacobian)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+                #diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+                #return torch.einsum("bi->bii", torch.einsum("bi,bi,bi->bi", diag_jacobian, tmp, diag_jacobian) )
+            elif not diag_inp and diag_out:
+                # full -> diag
+                diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+                return torch.einsum("bi,bii,bi->bi", diag_jacobian, tmp, diag_jacobian)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+                return torch.einsum("bi,bi,bi->bi", diag_jacobian, tmp, diag_jacobian)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps, wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            tmp11, tmp12, tmp22 = tmps
+            if not diag_inp and not diag_out:
+                # full -> full
+                diag_jacobian_1 = torch.ones(val1.shape, device=val1.device) - val1 ** 2
+                diag_jacobian_2 = torch.ones(val2.shape, device=val2.device) - val2 ** 2
+
+                tmp11 = torch.einsum("bi,bik,bk->bik", diag_jacobian_1, tmp11, diag_jacobian_1)
+                tmp12 = torch.einsum("bi,bik,bk->bik", diag_jacobian_1, tmp12, diag_jacobian_2)
+                tmp22 = torch.einsum("bi,bik,bk->bik", diag_jacobian_2, tmp22, diag_jacobian_2)
+                
+            elif diag_inp and not diag_out:
+                # diag -> full
+                diag_jacobian_1 = torch.ones(val1.shape, device=val1.device) - val1 ** 2
+                diag_jacobian_2 = torch.ones(val2.shape, device=val2.device) - val2 ** 2
+
+                tmp11 = torch.einsum("bi,bi,bi->bi", diag_jacobian_1, tmp11, diag_jacobian_1)
+                tmp12 = torch.einsum("bi,bi,bi->bi", diag_jacobian_1, tmp12, diag_jacobian_2)
+                tmp22 = torch.einsum("bi,bi,bi->bi", diag_jacobian_2, tmp22, diag_jacobian_2)
+                raise NotImplementedError
+                #return [torch.einsum("bi->bii", tmp) for tmp in [tmp11, tmp12, tmp22]]    
+            elif not diag_inp and diag_out:
+                # full -> diag
+                diag_jacobian_1 = torch.ones(val1.shape, device=val1.device) - val1 ** 2
+                diag_jacobian_2 = torch.ones(val2.shape, device=val2.device) - val2 ** 2
+
+                tmp11 = torch.einsum("bi,bii,bi->bi", diag_jacobian_1, tmp11, diag_jacobian_1)
+                tmp12 = torch.einsum("bi,bii,bi->bi", diag_jacobian_1, tmp12, diag_jacobian_2)
+                tmp22 = torch.einsum("bi,bii,bi->bi", diag_jacobian_2, tmp22, diag_jacobian_2)
+            
+            elif diag_inp and diag_out:
+                # diag -> diag
+                diag_jacobian_1 = torch.ones(val1.shape, device=val1.device) - val1 ** 2
+                diag_jacobian_2 = torch.ones(val2.shape, device=val2.device) - val2 ** 2
+
+                tmp11 = torch.einsum("bi,bi,bi->bi", diag_jacobian_1, tmp11, diag_jacobian_1)
+                tmp12 = torch.einsum("bi,bi,bi->bi", diag_jacobian_1, tmp12, diag_jacobian_2)
+                tmp22 = torch.einsum("bi,bi,bi->bi", diag_jacobian_2, tmp22, diag_jacobian_2)
+            return [tmp11, tmp12, tmp22]    
+
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return [None, None, None]
 
     def _jacobian_wrt_weight_sandwich(
         self, x: Tensor, val: Tensor, tmp: Tensor, diag_inp: bool = False, diag_out: bool = False
