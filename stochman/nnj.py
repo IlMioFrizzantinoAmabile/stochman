@@ -727,6 +727,46 @@ class Upsample(AbstractJacobian, nn.Upsample):
             .reshape(xs[0], *jac_in.shape[x.ndim :], *vs[1:])
             .movedim(dims2, dims1)
         )
+    
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
+        ) -> Tensor:
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return self._jacobian_wrt_input_sandwich_full_to_full(x, val, tmp)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                raise NotImplementedError
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return self._jacobian_wrt_input_sandwich_diag_to_diag(x, val, tmp)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps : Tuple[Tensor, Tensor, Tensor], wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return tuple(self._jacobian_wrt_input_sandwich_full_to_full(x1, val1, tmp) for tmp in tmps)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                raise NotImplementedError
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return tuple(self._jacobian_wrt_input_sandwich_diag_to_diag(x1, val1, tmp) for tmp in tmps)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return (None, None, None)
 
     def _jacobian_wrt_weight_sandwich(
         self, x: Tensor, val: Tensor, tmp: Tensor, diag_inp: bool = False, diag_out: bool = False
@@ -943,6 +983,88 @@ class Conv2d(AbstractJacobian, nn.Conv2d):
         # reshape as a (num of output)x(num of weights) matrix, one for each batch size
         jacobian = jacobian.reshape(b, c2 * h2 * w2, c2 * c1 * kernel_h * kernel_w)
         return jacobian
+    
+
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp, wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return self._jacobian_wrt_input_sandwich_full_to_full(x, val, tmp)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                raise NotImplementedError
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return self._jacobian_wrt_input_sandwich_diag_to_diag(x, val, tmp)
+        elif wrt=='weight':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return self._jacobian_wrt_weight_sandwich_full_to_full(x, val, tmp)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                return self._jacobian_wrt_weight_sandwich_full_to_diag(x, val, tmp)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return self._jacobian_wrt_weight_sandwich_diag_to_diag(x, val, tmp)
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps : Tuple[Tensor, Tensor, Tensor], wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return tuple(self._jacobian_wrt_input_sandwich_full_to_full(x1, val1, tmp_diag) for tmp_diag in tmps) #not dependent on x1,val1, only on their shape
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                raise NotImplementedError
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return tuple(self._jacobian_wrt_input_sandwich_diag_to_diag(x1, val1, tmp_diag) for tmp_diag in tmps) #not dependent on x1,val1, only on their shape
+        elif wrt=='weight':
+            if not diag_inp and not diag_out:
+                # full -> full
+                tmp11, tmp12, tmp22 = tmps
+                tmp11 = self._jacobian_wrt_weight_T_mult_right(x1, val1, 
+                            self._jacobian_wrt_weight_mult_left(x1, val1, tmp11))
+                tmp12 = self._jacobian_wrt_weight_T_mult_right(x1, val1, 
+                            self._jacobian_wrt_weight_mult_left(x2, val2, tmp12))
+                tmp22 = self._jacobian_wrt_weight_T_mult_right(x2, val2, 
+                            self._jacobian_wrt_weight_mult_left(x2, val2, tmp22))
+                return (tmp11, tmp12, tmp22)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                # TODO: Implement this in a smarter way
+                tmp11, tmp12, tmp22 = tmps
+                tmp11 = self._jacobian_wrt_weight_T_mult_right(x1, val1, 
+                            self._jacobian_wrt_weight_mult_left(x1, val1, tmp11))
+                tmp12 = self._jacobian_wrt_weight_T_mult_right(x1, val1, 
+                            self._jacobian_wrt_weight_mult_left(x2, val2, tmp12))
+                tmp22 = self._jacobian_wrt_weight_T_mult_right(x2, val2, 
+                            self._jacobian_wrt_weight_mult_left(x2, val2, tmp22))
+                return tuple(torch.diagonal(tmp, dim1=1, dim2=2) for tmp in [tmp11, tmp12, tmp22])
+            elif diag_inp and diag_out:
+                # diag -> diag
+                diag_tmp11, diag_tmp12, diag_tmp22 = tmps
+                diag_tmp11 = self._jacobian_wrt_weight_sandwich_diag_to_diag(x1, val1, diag_tmp11)
+                diag_tmp12 = self._jacobian_wrt_weight_sandwich_diag_to_diag_multipoint(x1, val1, x2, val2, diag_tmp12)
+                diag_tmp22 = self._jacobian_wrt_weight_sandwich_diag_to_diag(x2, val2, diag_tmp22)
+                return (diag_tmp11, diag_tmp12, diag_tmp22)
+        
+
 
     def _jacobian_wrt_input_T_mult_right(self, x: Tensor, val: Tensor, tmp: Tensor) -> Tensor:
         b, c1, h1, w1 = x.shape
@@ -1265,6 +1387,55 @@ class Conv2d(AbstractJacobian, nn.Conv2d):
             output_tmp = torch.cat([output_tmp, bias_term], dim=1)
 
         return output_tmp
+    
+    def _jacobian_wrt_weight_sandwich_diag_to_diag_multipoint(self, x: Tensor, xB: Tensor, val: Tensor, valB: Tensor, tmp_diag: Tensor) -> Tensor:
+
+        b, c1, h1, w1 = x.shape
+        c2, h2, w2 = val.shape[1:]
+        _, _, kernel_h, kernel_w = self.weight.shape
+
+        input_tmp = tmp_diag.reshape(b, c2, h2, w2)
+        # transpose the images in (output height)x(output width)
+        input_tmp = torch.flip(input_tmp, [-3, -2, -1])
+        # switch batch size and output channel
+        input_tmp = input_tmp.movedim(0, 1)
+
+        # define moving sum for Jt_tmp
+        output_tmp = torch.zeros(b, c2 * c1 * kernel_h * kernel_w, device=x.device)
+        flip_input = torch.flip(x, [-3, -2, -1]).movedim(0, 1)
+        flip_inputB = torch.flip(xB, [-3, -2, -1]).movedim(0, 1)
+        flip_squared_input = flip_input * flip_inputB
+
+        for i in range(b):
+            # set the weight to the convolution
+            weigth_sq = flip_squared_input[:, i : i + 1, :, :]
+            input_tmp_single_batch = input_tmp[:, i : i + 1, :, :]
+
+            output_tmp_single_batch = (
+                F.conv2d(
+                    input_tmp_single_batch.movedim((1, 2, 3), (-3, -2, -1)).reshape(-1, 1, h2, w2),
+                    weight=weigth_sq,
+                    bias=None,
+                    stride=self.stride,
+                    padding=self.dw_padding,
+                    dilation=self.dilation,
+                    groups=self.groups,
+                )
+                .reshape(c2, *input_tmp_single_batch.shape[4:], c1, kernel_h, kernel_w)
+                .movedim((-3, -2, -1), (1, 2, 3))
+            )
+
+            output_tmp_single_batch = torch.flip(output_tmp_single_batch, [-4, -3])
+            # reshape as a (num of weights)x(num of column) matrix
+            output_tmp_single_batch = output_tmp_single_batch.reshape(c2 * c1 * kernel_h * kernel_w)
+            output_tmp[i, :] = output_tmp_single_batch
+
+        if self.bias is not None:
+            bias_term = tmp_diag.reshape(b, c2, h2 * w2)
+            bias_term = torch.sum(bias_term, 2)
+            output_tmp = torch.cat([output_tmp, bias_term], dim=1)
+
+        return output_tmp
 
 
 class ConvTranspose2d(AbstractJacobian, nn.ConvTranspose2d):
@@ -1339,6 +1510,46 @@ class Reshape(AbstractJacobian, nn.Module):
     def _jacobian_wrt_input_mult_left_vec(self, x: Tensor, val: Tensor, jac_in: Tensor) -> Tensor:
         return jac_in.reshape(jac_in.shape[0], *self.dims, *jac_in.shape[2:])
 
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
+        ) -> Tensor:
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return tmp
+            elif diag_inp and not diag_out:
+                # diag -> full
+                return torch.diag_embed(tmp)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                return torch.diagonal(tmp, dim1=1, dim2=2)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return tmp
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps : Tuple[Tensor, Tensor, Tensor], wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return tmps
+            elif diag_inp and not diag_out:
+                # diag -> full
+                return tuple(torch.diag_embed(tmp) for tmp in tmps)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                return tuple(torch.diagonal(tmp, dim1=1, dim2=2) for tmp in tmps)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return tmps
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return (None, None, None)
+
     def _jacobian_wrt_input_sandwich(
         self, x: Tensor, val: Tensor, tmp: Tensor, diag_inp: bool = False, diag_out: bool = False
     ) -> Tensor:
@@ -1372,6 +1583,46 @@ class Flatten(AbstractJacobian, nn.Module):
             return jac_in.reshape(jac_in.shape[0], -1, *jac_in.shape[4:])
         if jac_in.ndim == 9:  # 3d conv
             return jac_in.reshape(jac_in.shape[0], -1, *jac_in.shape[5:])
+
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
+        ) -> Tensor:
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return tmp
+            elif diag_inp and not diag_out:
+                # diag -> full
+                return torch.diag_embed(tmp)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                return torch.diagonal(tmp, dim1=1, dim2=2)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return tmp
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps : Tuple[Tensor, Tensor, Tensor], wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return tmps
+            elif diag_inp and not diag_out:
+                # diag -> full
+                return tuple(torch.diag_embed(tmp) for tmp in tmps)
+            elif not diag_inp and diag_out:
+                # full -> diag
+                return tuple(torch.diagonal(tmp, dim1=1, dim2=2) for tmp in tmps)
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return tmps
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return (None, None, None)
 
     def _jacobian_wrt_input_sandwich(
         self, x: Tensor, val: Tensor, tmp: Tensor, diag_inp: bool = False, diag_out: bool = False
@@ -1496,6 +1747,47 @@ class MaxPool2d(AbstractJacobian, nn.MaxPool2d):
         idx = self.idx.reshape(-1)
         jac_in = jac_in[arange_repeated, idx, :, :, :].reshape(*val.shape, *jac_in_orig_shape[4:])
         return jac_in
+
+    
+    def _jacobian_sandwich(
+        self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
+        ) -> Tensor:
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return self._jacobian_wrt_input_sandwich_full_to_full(x, val, tmp)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                raise NotImplementedError
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return self._jacobian_wrt_input_sandwich_diag_to_diag(x, val, tmp)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jacobian_sandwich_multipoint(
+        self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, tmps : Tuple[Tensor, Tensor, Tensor], wrt = 'input', diag_inp: bool = True, diag_out: bool = True
+        ):
+        if wrt=='input':
+            if not diag_inp and not diag_out:
+                # full -> full
+                return tuple(self._jacobian_wrt_input_sandwich_full_to_full(x1, val1, tmp) for tmp in tmps)
+            elif diag_inp and not diag_out:
+                # diag -> full
+                raise NotImplementedError
+            elif not diag_inp and diag_out:
+                # full -> diag
+                raise NotImplementedError
+            elif diag_inp and diag_out:
+                # diag -> diag
+                return tuple(self._jacobian_wrt_input_sandwich_diag_to_diag(x1, val1, tmp) for tmp in tmps)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return (None, None, None)
 
     def _jacobian_wrt_weight_sandwich(
         self, x: Tensor, val: Tensor, tmp: Tensor, diag_inp: bool = False, diag_out: bool = False
