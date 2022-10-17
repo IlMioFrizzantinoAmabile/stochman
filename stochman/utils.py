@@ -1,5 +1,5 @@
 import torch
-import nnj
+from stochman import nnj
 
 def convert_to_stochman(sequential):
 
