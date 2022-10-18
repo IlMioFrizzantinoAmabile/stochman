@@ -61,6 +61,8 @@ class Sequential(nn.Sequential):
             j = identity(x) if (not isinstance(jacobian, Tensor) and jacobian) else jacobian
         for module in self._modules.values():
             val = module(x)
+            #val = module.forward(x)
+            #self.feature_maps.append(val.detach())
             if not (jacobian is False):
                 j = module._jacobian_wrt_input_mult_left_vec(x, val, j)
             x = val
@@ -109,7 +111,6 @@ class Sequential(nn.Sequential):
         #backward pass
         ms = []
         for k in range(len(self._modules_list) - 1, -1, -1):
-            print('layer:',self._modules_list[k])
             if wrt == 'weight':
                 m_k = self._modules_list[k]._mjp(self.feature_maps[k],
                                                  self.feature_maps[k+1], 
@@ -128,7 +129,7 @@ class Sequential(nn.Sequential):
         elif wrt == 'input':
             return matrix
         
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Union[Tensor, Tuple]:
         '''
@@ -136,7 +137,10 @@ class Sequential(nn.Sequential):
         '''
         #forward pass
         if val is None:
+            print('reforwarding',len(self.feature_maps))
             val = self.forward(x)
+        else:
+            print('non reforwarding',len(self.feature_maps))
         if matrix is None:
             matrix = torch.ones_like(val)
             from_diag = True
@@ -145,33 +149,87 @@ class Sequential(nn.Sequential):
         for k in range(len(self._modules_list) - 1, -1, -1):
             #print('layer:',self._modules_list[k])
             if wrt == 'weight':
-                #print(f"wrt weight: fromD {from_diag if k==len(self._modules_list)-1 else diag_backprop}, toD {to_diag}")
-                m_k = self._modules_list[k]._jmjp(self.feature_maps[k],
-                                                  self.feature_maps[k+1], 
-                                                  matrix,
-                                                  wrt = 'weight',
-                                                  from_diag = from_diag if k==len(self._modules_list)-1 else diag_backprop,
-                                                  to_diag = to_diag,
-                                                  diag_backprop = diag_backprop)
+                m_k = self._modules_list[k]._jTmjp(self.feature_maps[k],
+                                                   self.feature_maps[k+1], 
+                                                   matrix,
+                                                   wrt = 'weight',
+                                                   from_diag = from_diag if k==len(self._modules_list)-1 else diag_backprop,
+                                                   to_diag = to_diag,
+                                                   diag_backprop = diag_backprop)
                 if m_k is not None:
                     ms = [m_k] + ms
                 if k==0:
                     break
-            #print(f"wrt input: fromD {from_diag if k==len(self._modules_list)-1 else diag_backprop}, toD {to_diag if k==0 else diag_backprop}")
-            matrix = self._modules_list[k]._jmjp(self.feature_maps[k],
-                                                 self.feature_maps[k+1], 
-                                                 matrix,
-                                                 wrt = 'input',
-                                                 from_diag = from_diag if k==len(self._modules_list)-1 else diag_backprop,
-                                                 to_diag = to_diag if k==0 else diag_backprop,
-                                                 diag_backprop = diag_backprop)
+            matrix = self._modules_list[k]._jTmjp(self.feature_maps[k],
+                                                  self.feature_maps[k+1], 
+                                                  matrix,
+                                                  wrt = 'input',
+                                                  from_diag = from_diag if k==len(self._modules_list)-1 else diag_backprop,
+                                                  to_diag = to_diag if k==0 else diag_backprop,
+                                                  diag_backprop = diag_backprop)
         if wrt == 'input':
             return matrix
         elif wrt == 'weight':
+            if len(ms)==0:
+                return None #case of a Sequential with no parametric layers inside
             if to_diag:
                 return torch.cat(ms, dim=1)
             else:
                 return tuple(ms)
+    
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ): #-> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+
+        #forward passes
+        self.forward(x1)
+        feature_maps_1 = self.feature_maps
+        self.forward(x2)
+        feature_maps_2 = self.feature_maps
+
+        if matrixes is None:
+            matrixes = tuple(torch.ones_like(self.feature_maps[-1]) for _ in range(3))
+            from_diag = True
+
+        #backward pass
+        ms = []
+        for k in range(len(self._modules_list) - 1, -1, -1):
+            #print('layer:',self._modules_list[k])
+            if wrt == 'weight':
+                m_k = self._modules_list[k]._jTmjp_batch2(feature_maps_1[k],
+                                                          feature_maps_2[k],
+                                                          feature_maps_1[k+1],
+                                                          feature_maps_2[k+1],
+                                                          matrixes,
+                                                          wrt = 'weight',
+                                                          from_diag = from_diag if k==len(self._modules_list)-1 else diag_backprop,
+                                                          to_diag = to_diag,
+                                                          diag_backprop = diag_backprop)
+                if m_k is not None:
+                    ms = m_k + ms
+                if k==0:
+                    break
+            matrixes = self._modules_list[k]._jTmjp_batch2(feature_maps_1[k],
+                                                           feature_maps_2[k],
+                                                           feature_maps_1[k+1],
+                                                           feature_maps_2[k+1],
+                                                           matrixes,
+                                                           wrt = 'input',
+                                                           from_diag = from_diag if k==len(self._modules_list)-1 else diag_backprop,
+                                                           to_diag = to_diag if k==0 else diag_backprop,
+                                                           diag_backprop = diag_backprop)
+        if wrt == 'input':
+            return matrixes
+        elif wrt == 'weight':
+            if len(ms)==0:
+                return None #case of a Sequential with no parametric layers
+            return ms
+    
 
     def _jacobian_sandwich(
         self, x: Tensor, tmp: Tensor, wrt = 'weight', diag_inp: bool = False, method = 'diagonal exact', tmp_is_identity=False
@@ -361,7 +419,7 @@ class ResidualBlock(nn.Module):
         self._F = Sequential(*args, add_hooks=add_hooks)
 
     def forward(self, x):
-        return x + self._F(x)
+        return self._F(x) + x
     
     def _vjp(self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = 'input') -> Tensor:
         '''
@@ -372,7 +430,7 @@ class ResidualBlock(nn.Module):
                            vector, 
                            wrt=wrt)
         if wrt == 'input':
-            return vector + vjp
+            return vjp + vector
         elif wrt == 'weight':
             return vjp
 
@@ -389,27 +447,75 @@ class ResidualBlock(nn.Module):
         elif wrt == 'weight':
             return mjp
     
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Union[Tensor, Tuple]:
         '''
         jacobian.T matrix jacobian product
         '''
         #TODO: deal with diagonal matrix
-        jmjp = self._F._jmjp(x, 
-                             None if val is None else val-x, 
-                             matrix, 
-                             wrt=wrt, 
-                             from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop)
+        if val is None:
+            raise NotImplementedError
+        if matrix is None:
+            raise NotImplementedError
+        jTmjp = self._F._jTmjp(x, 
+                               None if val is None else val-x, 
+                               matrix, 
+                               wrt=wrt, 
+                               from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop)
         if wrt == 'input':
             mjp = self._F._mjp(x, 
                                None if val is None else val-x, 
                                matrix, 
                                wrt=wrt)
-            return jmjp + mjp + mjp.transpose(1,2) + matrix
+            jTmp = self._F._mjp(x, 
+                                None if val is None else val-x, 
+                                matrix.transpose(1,2), 
+                                wrt=wrt).transpose(1,2)
+            return jTmjp + mjp + jTmp + matrix
         elif wrt == 'weight':
-            return jmjp
-            
+            return jTmjp
+
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        #TODO: deal with diagonal matrix
+        if val1 is None:
+            raise NotImplementedError
+        if val2 is None:
+            raise NotImplementedError
+        if matrixes is None:
+            raise NotImplementedError
+        jTmjps = self._F._jTmjp_batch2(x1,
+                                       x2,
+                                       None if val1 is None else val1-x1, 
+                                       None if val2 is None else val2-x2, 
+                                       matrixes, 
+                                       wrt=wrt, 
+                                       from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop)
+        if wrt == 'input':
+            m11, m12, m22 = matrixes
+            mjps = tuple(self._F._mjp(x_i, 
+                                      None if val_i is None else val_i - x_i, 
+                                      m, 
+                                      wrt=wrt) for x_i,val_i,m in [(x1,val1,m11), (x2,val2,m12), (x2,val2,m22)]
+            )
+            jTmps = tuple(self._F._mjp(x_i, 
+                                       None if val_i is None else val_i - x_i, 
+                                       m.transpose(1,2), 
+                                       wrt=wrt).transpose(1,2) for x_i,val_i,m in [(x1,val1,m11), (x1,val1,m12), (x2,val2,m22)]
+            )
+            # new_m11 = J1T * m11 * J1 + m11 * J1 + J1T * m11 + m11
+            # new_m12 = J1T * m12 * J2 + m12 * J2 + J1T * m12 + m12
+            # new_m22 = J2T * m22 * J2 + m22 * J2 + J2T * m22 + m22
+            return tuple(jTmjp + mjp + jTmp + m for jTmjp, mjp, jTmp, m in zip(jTmjps, mjps, jTmps, matrixes))
+        elif wrt == 'weight':
+            return jTmjps
 
 class SkipConnection(nn.Module):
     def __init__(self, *args, add_hooks: bool = False):
@@ -426,8 +532,8 @@ class SkipConnection(nn.Module):
         '''
         b, l = x.shape
         vjp = self._F._vjp(x,
-                           None if val is None else val[:, l:-1],
-                           vector[:, l:-1], 
+                           None if val is None else val[:, l:],
+                           vector[:, l:], 
                            wrt=wrt)
         if wrt == 'input':
             return vector[:, :l] + vjp
@@ -440,15 +546,15 @@ class SkipConnection(nn.Module):
         '''
         b, l = x.shape
         mjp = self._F._mjp(x,
-                           None if val is None else val[:, l:-1],
-                           matrix[:, :, l:-1], 
+                           None if val is None else val[:, l:],
+                           matrix[:, :, l:], 
                            wrt=wrt)
         if wrt == 'input':
             return matrix[:, :, :l] + mjp
         elif wrt == 'weight':
             return mjp
     
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -456,19 +562,51 @@ class SkipConnection(nn.Module):
         '''
         #TODO: deal with diagonal matrix
         b, l = x.shape
-        jmjp = self._F._jmjp(x,
-                             None if val is None else val[:, l:-1],
-                             matrix[:, l:-1, l:-1], 
-                             wrt=wrt, 
-                             from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop)
+        jTmjp = self._F._jTmjp(x,
+                               None if val is None else val[:, l:],
+                               matrix[:, l:, l:], 
+                               wrt=wrt, 
+                               from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop)
         if wrt == 'input':
             mjp = self._F._mjp(x,
-                               None if val is None else val[:, l:-1],
-                               matrix[:, :l, l:-1], 
+                               None if val is None else val[:, l:],
+                               matrix[:, :l, l:], 
                                wrt=wrt)
-            return jmjp + mjp + mjp.transpose(1,2) + matrix
+            jTmp = self._F._mjp(x,
+                                None if val is None else val[:, l:],
+                                matrix[:, l:, :l].transpose(1,2), 
+                                wrt=wrt).transpose(1,2)
+            return jTmjp + mjp + jTmp + matrix[:, :l, :l]
         elif wrt == 'weight':
-            return jmjp
+            return jTmjp
+
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        b, l = x1.shape
+        #TODO: deal with diagonal matrix
+        if val1 is None:
+            raise NotImplementedError
+        if val2 is None:
+            raise NotImplementedError
+        if matrixes is None:
+            raise NotImplementedError
+        jTmjps = self._F._jTmjp_batch2(x1,
+                                       x2,
+                                       None if val1 is None else val1[:, l:], 
+                                       None if val2 is None else val2[:, l:], 
+                                       matrixes, 
+                                       wrt=wrt, 
+                                       from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop)
+        if wrt == 'input':
+            raise NotImplementedError
+        elif wrt == 'weight':
+            return jTmjps
 
 
 class AbstractJacobian:
@@ -552,7 +690,7 @@ class Linear(AbstractJacobian, nn.Linear):
             jacobian = self._jacobian_wrt_weight(x,val)
             return torch.einsum("bij,bjk->bik", matrix, jacobian)
     
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -602,6 +740,71 @@ class Linear(AbstractJacobian, nn.Linear):
                                     matrix], 
                                 dim=1)
 
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ):
+        if wrt == 'weight':
+            return [self._jTmjp_batch2_old(x1, x2, val1, val2, matrixes, wrt, from_diag, to_diag, diag_backprop)]
+        else:
+            return self._jTmjp_batch2_old(x1, x2, val1, val2, matrixes, wrt, from_diag, to_diag, diag_backprop)
+
+    def _jTmjp_batch2_old(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        if val1 is None or val2 is None:
+            raise NotImplementedError
+        if wrt=='input':
+            if not from_diag and not to_diag:
+                # full -> full
+                return tuple(torch.einsum("nm,bnj,jk->bmk", self.weight, m, self.weight) for m in matrixes)
+            elif from_diag and not to_diag:
+                # diag -> full
+                return tuple(torch.einsum("nm,bn,nk->bmk", self.weight, m_diag, self.weight) for m_diag in matrixes)
+            elif not from_diag and to_diag:
+                # full -> diag
+                return tuple(torch.einsum("nm,bnj,jm->bm", self.weight, m, self.weight) for m in matrixes)
+            elif from_diag and to_diag:
+                # diag -> diag
+                return tuple(torch.einsum("nm,bn,nm->bm", self.weight, m_diag, self.weight) for m_diag in matrixes)
+        elif wrt=='weight':
+            if not from_diag and not to_diag:
+                # full -> full
+                m11, m12, m22 = matrixes
+                jac_1 = self._jacobian_wrt_weight(x1, val1)
+                jac_2 = self._jacobian_wrt_weight(x2, val2)
+                return tuple(torch.einsum("bji,bjk,bkq->biq", jac_i, m, jac_j) for jac_i,m,jac_j in [(jac_1,m11,jac_1), (jac_1,m12,jac_2), (jac_2,m22,jac_2)])
+            elif from_diag and not to_diag:
+                # diag -> full
+                m11, m12, m22 = matrixes
+                jac_1 = self._jacobian_wrt_weight(x1, val1)
+                jac_2 = self._jacobian_wrt_weight(x2, val2)
+                return tuple(torch.einsum("bji,bj,bjk->bik", jac_i, m, jac_j) for jac_i,m,jac_j in [(jac_1,m11,jac_1), (jac_1,m12,jac_2), (jac_2,m22,jac_2)])
+            elif not from_diag and to_diag:
+                # full -> diag
+                m11, m12, m22 = matrixes
+                bs, _ = x1.shape
+                if self.bias is None:
+                    return tuple(torch.einsum("bj,bii,bj->bij", x_i, m, x_j).view(bs, -1) for x_i, m, x_j in [(x1, m11, x1), (x1, m12, x2), (x2, m22, x2)])
+                else:
+                    return tuple(torch.cat([torch.einsum("bj,bii,bj->bij", x_i, m, x_j).view(bs, -1), 
+                                            torch.einsum("bii->bi", m)], 
+                                            dim=1) for x_i, m, x_j in [(x1, m11, x1), (x1, m12, x2), (x2, m22, x2)])
+            elif from_diag and to_diag:
+                # diag -> diag
+                m11_diag, m12_diag, m22_diag = matrixes
+                bs, _ = x1.shape
+                if self.bias is None:
+                    return tuple(torch.einsum("bj,bi,bj->bij", x_i, m_diag, x_j).view(bs, -1) for x_i, m_diag, x_j in [(x1, m11_diag, x1), (x1, m12_diag, x2), (x2, m22_diag, x2)])
+                else:
+                    return tuple(torch.cat([torch.einsum("bj,bi,bj->bij", x_i, m_diag, x_j).view(bs, -1), 
+                                            m_diag], 
+                                            dim=1) for x_i, m_diag, x_j in [(x1, m11_diag, x1), (x1, m12_diag, x2), (x2, m22_diag, x2)])
 
     def _jacobian_sandwich(
         self, x: Tensor, val: Tensor, tmp, wrt = 'input', diag_inp: bool = True, diag_out: bool = True
@@ -851,7 +1054,7 @@ class L2Norm(nn.Module):
         elif wrt=='weight':
             return None
 
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -883,6 +1086,36 @@ class L2Norm(nn.Module):
             # non parametric layer has no jacobian with respect to weight
             return None
 
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        if val1 is None or val2 is None:
+            raise NotImplementedError
+        if wrt=='input':
+            m11, m12, m22 = matrixes
+            jac_1 = self.get_jacobian(x1, val1, wrt=wrt)
+            jac_2 = self.get_jacobian(x2, val2, wrt=wrt)
+
+            if not from_diag and not to_diag:
+                # full -> full
+                return tuple(torch.einsum("bji,bjk,bkq->biq", jac_i, m, jac_j) for  jac_i, m, jac_j in [(jac_1,m11,jac_1), (jac_1,m12,jac_2), (jac_2,m22,jac_2)])
+            elif from_diag and not to_diag:
+                # diag -> full
+                return tuple(torch.einsum("bji,bj,bjk->bik", jac_i, m, jac_j) for  jac_i, m, jac_j in [(jac_1,m11,jac_1), (jac_1,m12,jac_2), (jac_2,m22,jac_2)])
+            elif not from_diag and to_diag:
+                # full -> diag
+                return tuple(torch.einsum("bji,bjk,bki->bi", jac_i, m, jac_j) for  jac_i, m, jac_j in [(jac_1,m11,jac_1), (jac_1,m12,jac_2), (jac_2,m22,jac_2)])
+            elif from_diag and to_diag:
+                # diag -> diag
+                return tuple(torch.einsum("bji,bj,bji->bi", jac_i, m, jac_j) for  jac_i, m, jac_j in [(jac_1,m11,jac_1), (jac_1,m12,jac_2), (jac_2,m22,jac_2)])
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
 
     def _jacobian_sandwich(
         self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
@@ -1056,7 +1289,7 @@ class Upsample(AbstractJacobian, nn.Upsample):
         elif wrt=='weight':
             return None
 
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -1080,6 +1313,33 @@ class Upsample(AbstractJacobian, nn.Upsample):
             elif from_diag and to_diag:
                 # diag -> diag
                 return self._jacobian_wrt_input_sandwich_diag_to_diag(x, val, matrix)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        if val1 is None or val2 is None:
+            raise NotImplementedError
+        if wrt=='input':
+            if not from_diag and not to_diag:
+                # full -> full
+                return tuple(self._jacobian_wrt_input_sandwich_full_to_full(x1, val1, m) for m in matrixes)
+            elif from_diag and not to_diag:
+                # diag -> full
+                raise NotImplementedError
+            elif not from_diag and to_diag:
+                # full -> diag
+                raise NotImplementedError
+            elif from_diag and to_diag:
+                # diag -> diag
+                return tuple(self._jacobian_wrt_input_sandwich_diag_to_diag(x1, val1, m) for m in matrixes)
         elif wrt=='weight':
             # non parametric layer has no jacobian with respect to weight
             return None
@@ -1390,7 +1650,7 @@ class Conv2d(AbstractJacobian, nn.Conv2d):
                                   b_term],
                                 dim=2)
 
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -1434,10 +1694,85 @@ class Conv2d(AbstractJacobian, nn.Conv2d):
                     return self._jacobian_wrt_weight_sandwich_full_to_diag(x, val, matrix)
                 else:
                     # TODO: Implement this in a smarter way
-                    return torch.diagonal(self._jmjp(x, val, matrix, wrt=wrt, from_diag=from_diag, to_diag=False), dim1=1, dim2=2)
+                    return torch.diagonal(self._jTmjp(x, val, matrix, wrt=wrt, from_diag=from_diag, to_diag=False), dim1=1, dim2=2)
             elif from_diag and to_diag:
                 # diag -> diag
                 return self._jacobian_wrt_weight_sandwich_diag_to_diag(x, val, matrix)
+
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ):
+        if wrt == 'weight':
+            return [self._jTmjp_batch2_old(x1, x2, val1, val2, matrixes, wrt, from_diag, to_diag, diag_backprop)]
+        else:
+            return self._jTmjp_batch2_old(x1, x2, val1, val2, matrixes, wrt, from_diag, to_diag, diag_backprop)
+
+    def _jTmjp_batch2_old(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        if val1 is None or val2 is None:
+            raise NotImplementedError
+        if wrt=='input':
+            if not from_diag and not to_diag:
+                # full -> full
+                return tuple(self._jacobian_wrt_input_sandwich_full_to_full(x1, val1, m) for m in matrixes) #not dependent on x1,val1, only on their shape
+            elif from_diag and not to_diag:
+                # diag -> full
+                raise NotImplementedError
+            elif not from_diag and to_diag:
+                # full -> diag
+                raise NotImplementedError
+            elif from_diag and to_diag:
+                # diag -> diag
+                return tuple(self._jacobian_wrt_input_sandwich_diag_to_diag(x1, val1, m) for m in matrixes) #not dependent on x1,val1, only on their shape
+        elif wrt=='weight':
+            m11, m12, m22 = matrixes
+            if not from_diag and not to_diag:
+                # full -> full
+                if self.bias is None:
+                    return tuple(self._jacobian_wrt_weight_T_mult_right(x_i, val_i, 
+                                self._jacobian_wrt_weight_mult_left(x_j, val_j, m)) for x_i, val_i, m, x_j, val_j in [(x1, val1, m11, x1, val1),
+                                                                                                                      (x1, val1, m12, x2, val2), 
+                                                                                                                      (x2, val2, m22, x2, val2)])
+                else:
+                    return tuple(self._mjp(x_i, val_i, 
+                                    self._mjp(x_j, val_j, m, wrt=wrt).movedim(-2,-1), 
+                                wrt=wrt).movedim(-2,-1) for x_i, val_i, m, x_j, val_j in [(x1, val1, m11, x1, val1),
+                                                                                          (x1, val1, m12, x2, val2), 
+                                                                                          (x2, val2, m22, x2, val2)])
+            elif from_diag and not to_diag:
+                # diag -> full
+                raise NotImplementedError
+            elif not from_diag and to_diag:
+                # full -> diag
+                # TODO: Implement this in a smarter way
+                if self.bias is None:
+                    return tuple(torch.diagonal(self._jacobian_wrt_weight_T_mult_right(x_i, val_i, 
+                                                self._jacobian_wrt_weight_mult_left(x_j, val_j, m)),
+                                 dim1=1, dim2=2) for x_i, val_i, m, x_j, val_j in [(x1, val1, m11, x1, val1),
+                                                                                   (x1, val1, m12, x2, val2), 
+                                                                                   (x2, val2, m22, x2, val2)])
+                else:
+                    return tuple(torch.diagonal(self._mjp(x_i, val_i, 
+                                                 self._mjp(x_j, val_j, m, wrt=wrt).movedim(-2,-1), 
+                                                wrt=wrt).movedim(-2,-1),
+                                 dim1=1, dim2=2) for x_i, val_i, m, x_j, val_j in [(x1, val1, m11, x1, val1),
+                                                                                   (x1, val1, m12, x2, val2), 
+                                                                                   (x2, val2, m22, x2, val2)])
+            elif from_diag and to_diag:
+                # diag -> diag
+                if self.bias is None:
+                    return tuple(self._jacobian_wrt_weight_sandwich_diag_to_diag(x1, val1, m11),
+                                 self._jacobian_wrt_weight_sandwich_diag_to_diag_multipoint(x1, val1, x2, val2, m12),
+                                 self._jacobian_wrt_weight_sandwich_diag_to_diag(x2, val2, m22) )
+                else:
+                    raise NotImplementedError
 
     def _jacobian_sandwich(
         self, x: Tensor, val: Tensor, tmp, wrt = 'input', diag_inp: bool = True, diag_out: bool = True
@@ -2000,7 +2335,7 @@ class Reshape(AbstractJacobian, nn.Module):
         elif wrt=='weight':
             return None
 
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -2024,6 +2359,33 @@ class Reshape(AbstractJacobian, nn.Module):
             elif from_diag and to_diag:
                 # diag -> diag
                 return matrix
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+    
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        if val1 is None or val2 is None:
+            raise NotImplementedError
+        if wrt=='input':
+            if not from_diag and not to_diag:
+                # full -> full
+                return matrixes
+            elif from_diag and not to_diag:
+                # diag -> full
+                return tuple(torch.diag_embed(m) for m in matrixes)
+            elif not from_diag and to_diag:
+                # full -> diag
+                return tuple(torch.diagonal(m, dim1=1, dim2=2) for m in matrixes)
+            elif from_diag and to_diag:
+                # diag -> diag
+                return matrixes
         elif wrt=='weight':
             # non parametric layer has no jacobian with respect to weight
             return None
@@ -2138,7 +2500,7 @@ class Flatten(AbstractJacobian, nn.Module):
         elif wrt=='weight':
             return None
 
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -2162,6 +2524,33 @@ class Flatten(AbstractJacobian, nn.Module):
             elif from_diag and to_diag:
                 # diag -> diag
                 return matrix
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+        
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        if val1 is None or val2 is None:
+            raise NotImplementedError
+        if wrt=='input':
+            if not from_diag and not to_diag:
+                # full -> full
+                return matrixes
+            elif from_diag and not to_diag:
+                # diag -> full
+                return tuple(torch.diag_embed(m) for m in matrixes)
+            elif not from_diag and to_diag:
+                # full -> diag
+                return tuple(torch.diagonal(m, dim1=1, dim2=2) for m in matrixes)
+            elif from_diag and to_diag:
+                # diag -> diag
+                return matrixes
         elif wrt=='weight':
             # non parametric layer has no jacobian with respect to weight
             return None
@@ -2386,7 +2775,7 @@ class MaxPool2d(AbstractJacobian, nn.MaxPool2d):
         elif wrt=='weight':
             return None
 
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -2414,6 +2803,32 @@ class MaxPool2d(AbstractJacobian, nn.MaxPool2d):
             # non parametric layer has no jacobian with respect to weight
             return None
 
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        if val1 is None or val2 is None:
+            raise NotImplementedError
+        if wrt=='input':
+            if not from_diag and not to_diag:
+                # full -> full
+                return tuple(self._jacobian_wrt_input_sandwich_full_to_full(x1, val1, m) for m in matrixes)
+            elif from_diag and not to_diag:
+                # diag -> full
+                raise NotImplementedError
+            elif not from_diag and to_diag:
+                # full -> diag
+                raise NotImplementedError
+            elif from_diag and to_diag:
+                # diag -> diag
+                return tuple(self._jacobian_wrt_input_sandwich_diag_to_diag(x1, val1, m) for m in matrixes)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
     
     def _jacobian_sandwich(
         self, x: Tensor, val: Tensor, tmp: Tensor, wrt = 'input', diag_inp: bool = False, diag_out: bool = False
@@ -2747,7 +3162,7 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
             return None
 
 
-    def _jmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
+    def _jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
         from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
         ) -> Tensor:
         '''
@@ -2774,6 +3189,44 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
                 # diag -> diag
                 diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
                 return torch.einsum("bi,bi,bi->bi", diag_jacobian, matrix, diag_jacobian)
+        elif wrt=='weight':
+            # non parametric layer has no jacobian with respect to weight
+            return None
+
+    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
+        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
+        ) -> Union[Tensor, Tuple]:
+        '''
+        jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
+        '''
+        assert x1.shape == x2.shape
+        if val1 is None:
+            val1 = self.forward(x1)
+        if val2 is None:
+            val2 = self.forward(x2)
+        assert val1.shape == val2.shape
+        if matrixes is None:
+            matrixes = torch.ones_like(val1)
+            from_diag = True
+
+        if wrt=='input':
+            m11, m12, m22 = matrixes
+            jac_1_diag = torch.ones_like(val1) - val1 ** 2
+            jac_2_diag = torch.ones_like(val2) - val2 ** 2
+
+            if not from_diag and not to_diag:
+                # full -> full
+                return tuple(torch.einsum("bi,bij,bj->bij", jac_i, m, jac_j) for jac_i, m, jac_j in [(jac_1_diag, m11, jac_1_diag), (jac_1_diag, m12, jac_2_diag), (jac_2_diag, m22, jac_2_diag)])
+            elif from_diag and not to_diag:
+                # diag -> full
+                raise NotImplementedError
+            elif not from_diag and to_diag:
+                # full -> diag
+                return tuple(torch.einsum("bi,bii,bi->bi", jac_i, m, jac_j) for jac_i, m, jac_j in [(jac_1_diag, m11, jac_1_diag), (jac_1_diag, m12, jac_2_diag), (jac_2_diag, m22, jac_2_diag)])
+            elif from_diag and to_diag:
+                # diag -> diag
+                return tuple(torch.einsum("bi,bi,bi->bi", jac_i, m, jac_j) for jac_i, m, jac_j in [(jac_1_diag, m11, jac_1_diag), (jac_1_diag, m12, jac_2_diag), (jac_2_diag, m22, jac_2_diag)])
         elif wrt=='weight':
             # non parametric layer has no jacobian with respect to weight
             return None
