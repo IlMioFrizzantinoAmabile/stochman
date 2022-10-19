@@ -24,6 +24,7 @@ class HessianCalculator(ABC, nn.Module):
         self.wrt = wrt
         self.loss_func = loss_func
         self.shape = shape
+        self.speed = speed
         if speed == "fast":
             self.method = self.shape + " approx"
         if speed == "half":
@@ -44,10 +45,10 @@ class HessianCalculator(ABC, nn.Module):
     def compute_mse_hessian(self, x, sequential):
 
         # compute Jacobian sandwich of the identity for each element in the batch
-        Jt_J = sequential._jacobian_sandwich(x, None, 
-                                            tmp_is_identity = True,
-                                            wrt = self.wrt, 
-                                            method = self.method)
+        Jt_J = sequential._jTmjp(x, None, None,
+                                 wrt = self.wrt, 
+                                 to_diag = self.shape=="diagonal", 
+                                 diag_backprop = self.speed=="fast")
         # average along batch size
         Jt_J = torch.mean(Jt_J, dim=0)
         return Jt_J
@@ -72,10 +73,18 @@ class HessianCalculator(ABC, nn.Module):
         if self.loss_func == "contrastive_full" or self.loss_func == "contrastive_pos":
 
             # compute positive part
-            pos = sequential._jacobian_sandwich_multipoint(x[ap], x[p], None,
-                                                           tmp_is_identity = True,
-                                                           wrt = self.wrt, 
-                                                           method = self.method)
+            pos = sequential._jTmjp_batch2(x[ap], x[p], None, None, None,
+                                           wrt = self.wrt,
+                                           to_diag = self.shape=="diagonal", 
+                                           diag_backprop = self.speed=="fast")
+            if self.shape=="diagonal":
+                if self.wrt == "weight":
+                    pos = [matrixes[0] - 2 * matrixes[1] + matrixes[2] for matrixes in pos]
+                    pos = torch.cat(pos, dim=1)
+                else:
+                    pos = pos[0] - 2 * pos[1] + pos[2]
+            else:
+                raise NotImplementedError
             # sum along batch size
             pos = torch.sum(pos, dim=0)
 
@@ -83,10 +92,18 @@ class HessianCalculator(ABC, nn.Module):
                 return pos
             
             # compute negative part
-            neg = sequential._jacobian_sandwich_multipoint(x[an], x[n], None,
-                                                           tmp_is_identity = True,
-                                                           wrt = self.wrt, 
-                                                           method = self.method)
+            neg = sequential._jTmjp_batch2(x[an], x[n], None, None, None,
+                                           wrt = self.wrt,
+                                           to_diag = self.shape=="diagonal", 
+                                           diag_backprop = self.speed=="fast")
+            if self.shape=="diagonal":
+                if self.wrt == "weight":
+                    neg = [matrixes[0] - 2 * matrixes[1] + matrixes[2] for matrixes in neg]
+                    neg = torch.cat(neg, dim=1)
+                else:
+                    neg = neg[0] - 2 * neg[1] + neg[2]
+            else:
+                raise NotImplementedError
             # sum along batch size
             neg = torch.sum(neg, dim=0)
             
@@ -98,18 +115,18 @@ class HessianCalculator(ABC, nn.Module):
             negatives = x[n] if len(tuple_indices) == 3 else torch.cat((x[an], x[n]))
 
             # compute positive part
-            pos = sequential._jacobian_sandwich(positives, None,
-                                                tmp_is_identity = True,
-                                                wrt = self.wrt, 
-                                                method = self.method)
+            pos = sequential._jTmjp(positives, None, None,
+                                    wrt = self.wrt, 
+                                    to_diag = self.shape=="diagonal", 
+                                    diag_backprop = self.speed=="fast")
             # sum along batch size
             pos = torch.sum(pos, dim=0)
 
             # compute negative part
-            neg = sequential._jacobian_sandwich(negatives, None,
-                                                tmp_is_identity = True,
-                                                wrt = self.wrt, 
-                                                method = self.method)
+            neg = sequential._jTmjp(negatives, None, None,
+                                    wrt = self.wrt, 
+                                    to_diag = self.shape=="diagonal", 
+                                    diag_backprop = self.speed=="fast")
             # sum along batch size
             neg = torch.sum(pos, dim=0)
 
