@@ -60,6 +60,7 @@ class Sequential(nn.Sequential):
         if not (jacobian is False):
             j = identity(x) if (not isinstance(jacobian, Tensor) and jacobian) else jacobian
         for module in self._modules.values():
+            print(module)
             val = module(x)
             #val = module.forward(x)
             #self.feature_maps.append(val.detach())
@@ -137,10 +138,7 @@ class Sequential(nn.Sequential):
         '''
         #forward pass
         if val is None:
-            print('reforwarding',len(self.feature_maps))
             val = self.forward(x)
-        else:
-            print('non reforwarding',len(self.feature_maps))
         if matrix is None:
             matrix = torch.ones_like(val)
             from_diag = True
@@ -600,11 +598,26 @@ class SkipConnection(nn.Module):
                                        x2,
                                        None if val1 is None else val1[:, l:], 
                                        None if val2 is None else val2[:, l:], 
-                                       matrixes, 
+                                       tuple(m[:, l:, l:] for m in matrixes), 
                                        wrt=wrt, 
                                        from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop)
         if wrt == 'input':
-            raise NotImplementedError
+            m11, m12, m22 = matrixes
+            mjps = tuple(self._F._mjp(x_i, 
+                                      None if val_i is None else val_i[:, l:], 
+                                      m[:, :l, l:], 
+                                      wrt=wrt) for x_i,val_i,m in [(x1,val1,m11), (x2,val2,m12), (x2,val2,m22)]
+            )
+            jTmps = tuple(self._F._mjp(x_i, 
+                                       None if val_i is None else val_i[:, l:], 
+                                       m[:, l:, :l].transpose(1,2), 
+                                       wrt=wrt).transpose(1,2) for x_i,val_i,m in [(x1,val1,m11), (x1,val1,m12), (x2,val2,m22)]
+            )
+            # schematic of the update rule with jacobian products (neglecting batch size)
+            # new_m11 = J1T * m11[l:,l:] * J1 + m11[l:,:l] * J1 + J1T * m11[:l,l:] + m11[:l,:l]
+            # new_m12 = J1T * m12[l:,l:] * J2 + m12[l:,:l] * J2 + J1T * m12[:l,l:] + m12[:l,:l]
+            # new_m22 = J2T * m22[l:,l:] * J2 + m22[l:,:l] * J2 + J2T * m22[:l,l:] + m22[:l,:l]
+            return tuple(jTmjp + mjp + jTmp + m[:,:l,:l] for jTmjp, mjp, jTmp, m in zip(jTmjps, mjps, jTmps, matrixes))
         elif wrt == 'weight':
             return jTmjps
 
