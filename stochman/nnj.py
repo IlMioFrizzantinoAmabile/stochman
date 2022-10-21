@@ -60,7 +60,6 @@ class Sequential(nn.Sequential):
         if not (jacobian is False):
             j = identity(x) if (not isinstance(jacobian, Tensor) and jacobian) else jacobian
         for module in self._modules.values():
-            print(module)
             val = module(x)
             #val = module.forward(x)
             #self.feature_maps.append(val.detach())
