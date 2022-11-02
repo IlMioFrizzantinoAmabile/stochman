@@ -155,6 +155,7 @@ class Sequential(nn.Sequential):
                                                    diag_backprop = diag_backprop)
                 if m_k is not None:
                     ms = [m_k] + ms
+                    #ms = m_k + ms
                 if k==0:
                     break
             matrix = self._modules_list[k]._jTmjp(self.feature_maps[k],
@@ -169,6 +170,7 @@ class Sequential(nn.Sequential):
         elif wrt == 'weight':
             if len(ms)==0:
                 return None #case of a Sequential with no parametric layers inside
+            #return ms
             if to_diag:
                 return torch.cat(ms, dim=1)
             else:
@@ -557,14 +559,16 @@ class SkipConnection(nn.Module):
         '''
         jacobian.T matrix jacobian product
         '''
-        #TODO: deal with diagonal matrix
+        assert (not diag_backprop) or (diag_backprop and from_diag and to_diag)
         b, l = x.shape
         jTmjp = self._F._jTmjp(x,
                                None if val is None else val[:, l:],
-                               matrix[:, l:, l:], 
+                               matrix[:, l:, l:] if not from_diag else matrix[:, l:], 
                                wrt=wrt, 
                                from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop)
         if wrt == 'input':
+            if diag_backprop:
+                return jTmjp + matrix[:, :l]
             mjp = self._F._mjp(x,
                                None if val is None else val[:, l:],
                                matrix[:, :l, l:], 
@@ -1780,9 +1784,9 @@ class Conv2d(AbstractJacobian, nn.Conv2d):
             elif from_diag and to_diag:
                 # diag -> diag
                 if self.bias is None:
-                    return tuple(self._jacobian_wrt_weight_sandwich_diag_to_diag(x1, val1, m11),
-                                 self._jacobian_wrt_weight_sandwich_diag_to_diag_multipoint(x1, val1, x2, val2, m12),
-                                 self._jacobian_wrt_weight_sandwich_diag_to_diag(x2, val2, m22) )
+                    return tuple((self._jacobian_wrt_weight_sandwich_diag_to_diag(x1, val1, m11),
+                                  self._jacobian_wrt_weight_sandwich_diag_to_diag_multipoint(x1, x2, val1, val2, m12),
+                                  self._jacobian_wrt_weight_sandwich_diag_to_diag(x2, val2, m22) ))
                 else:
                     raise NotImplementedError
 
@@ -3199,8 +3203,8 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
                 return torch.einsum("bi,bii,bi->bi", diag_jacobian, matrix, diag_jacobian)
             elif from_diag and to_diag:
                 # diag -> diag
-                diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
-                return torch.einsum("bi,bi,bi->bi", diag_jacobian, matrix, diag_jacobian)
+                diag_jacobian_square = (torch.ones(val.shape, device=val.device) - val ** 2)**2
+                return torch.einsum("bi,bi->bi", diag_jacobian_square, matrix)
         elif wrt=='weight':
             # non parametric layer has no jacobian with respect to weight
             return None

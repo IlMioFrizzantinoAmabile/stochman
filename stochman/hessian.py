@@ -25,12 +25,8 @@ class HessianCalculator(ABC, nn.Module):
         self.loss_func = loss_func
         self.shape = shape
         self.speed = speed
-        if speed == "fast":
-            self.method = self.shape + " approx"
-        if speed == "half":
-            self.method = self.shape + " exact"
         if speed == "slow":
-            self.method = self.shape + " second order"
+           # second order
             raise NotImplementedError
 
     def compute_hessian(self, x, sequential, tuple_indices = None):
