@@ -683,8 +683,15 @@ class Linear(AbstractJacobian, nn.Linear):
         if wrt=='input':
             return torch.einsum("bj,jk->bk", vector, self.weight)
         elif wrt=='weight':
-            jacobian = self._jacobian_wrt_weight(x,val)
-            return torch.einsum("bi,bij->bj", vector, jacobian)
+            #jacobian = self._jacobian_wrt_weight(x,val)
+            #return torch.einsum("bi,bij->bj", vector, jacobian)
+            b, l = x.shape
+            if self.bias is None:
+                return torch.einsum("bi,bj->bij", vector, x).view(b,-1)
+            else:
+                return torch.cat([torch.einsum("bi,bj->bij", vector, x).view(b,-1), 
+                                  vector], 
+                                dim=1)
 
     def _jmp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input') -> Tensor:
         '''
@@ -740,19 +747,21 @@ class Linear(AbstractJacobian, nn.Linear):
             elif not from_diag and to_diag:
                 # full -> diag
                 bs, _, _ = matrix.shape
+                x_sq = x * x
                 if self.bias is None:
-                    return torch.einsum("bj,bii,bj->bij", x, matrix, x).view(bs, -1)
+                    return torch.einsum("bj,bii->bij", x_sq, matrix).view(bs, -1)
                 else:
-                    return torch.cat([torch.einsum("bj,bii,bj->bij", x, matrix, x).view(bs, -1), 
+                    return torch.cat([torch.einsum("bj,bii->bij", x_sq, matrix).view(bs, -1), 
                                     torch.einsum("bii->bi", matrix)], 
                                 dim=1)
             elif from_diag and to_diag:
                 # diag -> diag
                 bs, _ = matrix.shape
+                x_sq = x * x
                 if self.bias is None:
-                    return torch.einsum("bj,bi,bj->bij", x, matrix, x).view(bs, -1)
+                    return torch.einsum("bj,bi->bij", x_sq, matrix).view(bs, -1)
                 else:
-                    return torch.cat([torch.einsum("bj,bi,bj->bij", x, matrix, x).view(bs, -1), 
+                    return torch.cat([torch.einsum("bj,bi->bij", x_sq, matrix).view(bs, -1), 
                                     matrix], 
                                 dim=1)
 
@@ -3141,8 +3150,9 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
         '''
         jacobian vector product
         '''
+        b = x.shape[0]
         if wrt=='input':
-            diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+            diag_jacobian = (torch.ones(val.shape, device=val.device) - val ** 2).reshape(b,-1)
             return torch.einsum("bj,bj->bj", diag_jacobian, vector)
         elif wrt=='weight':
             return None
@@ -3151,8 +3161,9 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
         '''
         vector jacobian product
         '''
+        b = x.shape[0]
         if wrt=='input':
-            diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+            diag_jacobian = (torch.ones(val.shape, device=val.device) - val ** 2).reshape(b,-1)
             return torch.einsum("bi,bi->bi", vector, diag_jacobian)
         elif wrt=='weight':
             return None
@@ -3161,8 +3172,9 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
         '''
         jacobian matrix product
         '''
+        b = x.shape[0]
         if wrt=='input':
-            diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+            diag_jacobian = (torch.ones(val.shape, device=val.device) - val ** 2).reshape(b,-1)
             return torch.einsum("bi,bij->bij", diag_jacobian, matrix)
         elif wrt=='weight':
             return None
@@ -3171,8 +3183,9 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
         '''
         matrix jacobian product
         '''
+        b = x.shape[0]
         if wrt=='input':
-            diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+            diag_jacobian = (torch.ones(val.shape, device=val.device) - val ** 2).reshape(b,-1)
             return torch.einsum("bij,bj->bij", matrix, diag_jacobian)
         elif wrt=='weight':
             return None
@@ -3184,26 +3197,27 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
         '''
         jacobian.T matrix jacobian product
         '''
+        b = x.shape[0]
         if val is None:
             val = self.forward(x)
         if matrix is None:
-            matrix = torch.ones_like(val)
+            matrix = torch.ones_like(val).reshape(b,-1)
             from_diag = True
         if wrt=='input':
             if not from_diag and not to_diag:
                 # full -> full
-                diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+                diag_jacobian = (torch.ones(val.shape, device=val.device) - val ** 2).reshape(b,-1)
                 return torch.einsum("bi,bik,bk->bik", diag_jacobian, matrix, diag_jacobian)
             elif from_diag and not to_diag:
                 # diag -> full
                 raise NotImplementedError
             elif not from_diag and to_diag:
                 # full -> diag
-                diag_jacobian = torch.ones(val.shape, device=val.device) - val ** 2
+                diag_jacobian = (torch.ones(val.shape, device=val.device) - val ** 2).reshape(b,-1)
                 return torch.einsum("bi,bii,bi->bi", diag_jacobian, matrix, diag_jacobian)
             elif from_diag and to_diag:
                 # diag -> diag
-                diag_jacobian_square = (torch.ones(val.shape, device=val.device) - val ** 2)**2
+                diag_jacobian_square = ((torch.ones(val.shape, device=val.device) - val ** 2)**2).reshape(b,-1)
                 return torch.einsum("bi,bi->bi", diag_jacobian_square, matrix)
         elif wrt=='weight':
             # non parametric layer has no jacobian with respect to weight
@@ -3217,19 +3231,20 @@ class Tanh(AbstractActivationJacobian, nn.Tanh):
         jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
         '''
         assert x1.shape == x2.shape
+        b = x1.shape[0]
         if val1 is None:
             val1 = self.forward(x1)
         if val2 is None:
             val2 = self.forward(x2)
         assert val1.shape == val2.shape
         if matrixes is None:
-            matrixes = torch.ones_like(val1)
+            matrixes = tuple(torch.ones_like(val1).reshape(b,-1) for _ in range(3))
             from_diag = True
 
         if wrt=='input':
             m11, m12, m22 = matrixes
-            jac_1_diag = torch.ones_like(val1) - val1 ** 2
-            jac_2_diag = torch.ones_like(val2) - val2 ** 2
+            jac_1_diag = (torch.ones_like(val1) - val1 ** 2).reshape(b,-1)
+            jac_2_diag = (torch.ones_like(val2) - val2 ** 2).reshape(b,-1)
 
             if not from_diag and not to_diag:
                 # full -> full
