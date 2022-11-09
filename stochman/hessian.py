@@ -109,7 +109,7 @@ class HessianCalculator(ABC, nn.Module):
 
         if self.loss_func == "cross_entropy_binary":
             bernoulli_p = torch.exp(val) / (1 + torch.exp(val))
-            cross_entropy = target * torch.log(bernoulli_p) + (1-target) * torch.log(bernoulli_p)
+            cross_entropy = - (target * torch.log(bernoulli_p) + (1-target) * torch.log(bernoulli_p))
 
         if self.loss_func == "cross_entropy_multiclass":
             bernoulli_p = ...
