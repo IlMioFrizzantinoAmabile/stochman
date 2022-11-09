@@ -90,6 +90,9 @@ class HessianCalculator(ABC, nn.Module):
     def compute_mse_hessian(self, x, nnj_module):
 
         # compute Jacobian sandwich of the identity for each element in the batch
+        # H = identity matrix (None is interpreted as identity by jTmjp)
+
+        # backpropagate through the network
         Jt_J = nnj_module._jTmjp(x, None, None,
                                  wrt = self.wrt, 
                                  to_diag = self.shape=="diagonal", 
@@ -106,7 +109,7 @@ class HessianCalculator(ABC, nn.Module):
 
         if self.loss_func == "cross_entropy_binary":
             bernoulli_p = torch.exp(val) / (1 + torch.exp(val))
-            cross_entropy = target * bernoulli_p + (1-target)*bernoulli_p
+            cross_entropy = target * torch.log(bernoulli_p) + (1-target) * torch.log(bernoulli_p)
 
         if self.loss_func == "cross_entropy_multiclass":
             bernoulli_p = ...
@@ -122,12 +125,13 @@ class HessianCalculator(ABC, nn.Module):
 
         # initialize the hessian H of the cross entropy
         if self.loss_func == "cross_entropy_binary":
-            p = torch.exp(val) / (1 + torch.exp(val))
-            H = p - p**2  # hessian in diagonal form
+            bernoulli_p = torch.exp(val) / (1 + torch.exp(val))
+            H = bernoulli_p - bernoulli_p**2  # hessian in diagonal form
 
         if self.loss_func == "cross_entropy_multiclass":
             H = ...
 
+        # backpropagate through the network
         Jt_H_J = nnj_module._jTmjp(x, val, H,
                                    wrt = self.wrt, 
                                    from_diag = True,
