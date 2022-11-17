@@ -47,10 +47,11 @@ class Sequential(nn.Sequential):
         if self.add_hooks:
             self.feature_maps = []
             self.handles = []
-            def fw_hook(module, input, output):
-                self.feature_maps.append(output.detach())
+            #def fw_hook(module, input, output):
+            #    self.feature_maps.append(output.detach())
             for k in range(len(self._modules)):
-                self.handles.append(self._modules_list[k].register_forward_hook(fw_hook))
+                #self.handles.append(self._modules_list[k].register_forward_hook(fw_hook))
+                self.handles.append(self._modules_list[k].register_forward_hook(lambda m, i, o: self.feature_maps.append(o.detach())))
 
     def forward(
         self, x: Tensor, jacobian: Union[Tensor, bool] = False
