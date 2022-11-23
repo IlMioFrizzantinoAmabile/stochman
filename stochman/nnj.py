@@ -42,7 +42,7 @@ class Sequential(nn.Sequential):
     def __init__(self, *args, add_hooks: bool = False):
         super().__init__(*args)
         self._modules_list = list(self._modules.values())
-
+        
         self.add_hooks = add_hooks
         if self.add_hooks:
             self.feature_maps = []

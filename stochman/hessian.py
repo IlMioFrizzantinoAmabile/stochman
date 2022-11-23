@@ -331,7 +331,7 @@ class ArccosHessianCalculator(HessianCalculator):
             H_22 = cosine_times_identity + outer_12 + outer_21 - 3 * cosine_times_outer_22
 
             H_11_normalized = torch.einsum("bij,b->bij", H_11, 1 / (z1_norm**2))
-            H_12_normalized = torch.einsum("bij,b,b->bij", H_12, 1 / (z1_norm * z2_norm))
+            H_12_normalized = torch.einsum("bij,b->bij", H_12, 1 / (z1_norm * z2_norm))
             H_22_normalized = torch.einsum("bij,b->bij", H_22, 1 / (z2_norm**2))
             return tuple((H_11_normalized, H_12_normalized, H_22_normalized))
 
@@ -346,13 +346,13 @@ class ArccosHessianCalculator(HessianCalculator):
         if self.loss_func == "arccos_full" or self.loss_func == "arccos_pos":
 
             # compute positive part
-
+            
             # forward pass
             z1, z2 = nnj_module(x[ap]), nnj_module(x[p])
 
             # initialize the hessian of the loss
             H = _arccos_hessian(z1, z2)
-
+            
             # backpropagate through the network
             pos = nnj_module._jTmjp_batch2(
                 x[ap],
