@@ -104,9 +104,11 @@ class DiscretizedManifold(Manifold):
 
                 bs = x.shape[0]  # may be different from batch size for the last batch
 
-                line = CubicSpline(begin=torch.zeros(bs, dim, device=model_device),
-                                   end=torch.ones(bs, dim, device=model_device),
-                                   num_nodes=2)
+                line = CubicSpline(
+                    begin=torch.zeros(bs, dim, device=model_device),
+                    end=torch.ones(bs, dim, device=model_device),
+                    num_nodes=2,
+                )
                 line.begin = torch.cat([grid[0][x].view(-1, 1), grid[1][y].view(-1, 1)], dim=1)  # (bs)x2
                 line.end = torch.cat([grid[0][xn].view(-1, 1), grid[1][yn].view(-1, 1)], dim=1)  # (bs)x2
 

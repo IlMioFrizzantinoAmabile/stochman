@@ -26,9 +26,7 @@ class DiagLaplace(BaseLaplace):
 
     def init_hessian(self, data_size, net, device):
 
-        hessian = data_size * torch.ones_like(
-            parameters_to_vector(net.parameters()), device=device
-        )
+        hessian = data_size * torch.ones_like(parameters_to_vector(net.parameters()), device=device)
         return hessian
 
     def scale(self, h_s, b, data_size):
@@ -66,13 +64,9 @@ class BlockLaplace(BaseLaplace):
     def posterior_scale(self, hessian, scale=1, prior_prec=1):
 
         posterior_precision = [
-            h * scale + torch.diag_embed(prior_prec * torch.ones(h.shape[0]))
-            for h in hessian
+            h * scale + torch.diag_embed(prior_prec * torch.ones(h.shape[0])) for h in hessian
         ]
-        posterior_scale = [
-            torch.cholesky_inverse(layer_post_prec)
-            for layer_post_prec in posterior_precision
-        ]
+        posterior_scale = [torch.cholesky_inverse(layer_post_prec) for layer_post_prec in posterior_precision]
         return posterior_scale
 
     def init_hessian(self, data_size, net, device):
@@ -83,9 +77,7 @@ class BlockLaplace(BaseLaplace):
             if isinstance(layer, torch.nn.Conv2d) or isinstance(layer, torch.nn.Linear):
                 params = parameters_to_vector(layer.parameters())
                 n_params = len(params)
-                hessian.append(
-                    data_size * torch.ones(n_params, n_params, device=device)
-                )
+                hessian.append(data_size * torch.ones(n_params, n_params, device=device))
 
         return hessian
 
@@ -105,9 +97,7 @@ class BlockLaplace(BaseLaplace):
                     tmp += hessian[s][i]
 
             tmp = tmp / n_samples
-            tmp = constant * tmp + torch.diag_embed(
-                torch.ones(len(tmp), device=tmp.device)
-            )
+            tmp = constant * tmp + torch.diag_embed(torch.ones(len(tmp), device=tmp.device))
             hessian_mean.append(tmp)
 
         return hessian_mean
