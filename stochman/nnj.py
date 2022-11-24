@@ -26,41 +26,51 @@ class Identity(nn.Module):
     #         return val, jac
     #     return val
 
-    def _jacobian(self, x: Tensor, val: Union[Tensor, None] = None, wrt: str = 'input') -> Union[Tensor, None]:
-        if wrt == 'input':
+    def _jacobian(
+        self, x: Tensor, val: Union[Tensor, None] = None, wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        if wrt == "input":
             xs = x.shape
             jacobian = (
-                    torch.eye(xs[1:].numel(), xs[1:].numel(), dtype=x.dtype, device=x.device)
-                    .repeat(xs[0], 1, 1)
-                    .reshape(xs[0], *xs[1:], *xs[1:])
-                )
+                torch.eye(xs[1:].numel(), xs[1:].numel(), dtype=x.dtype, device=x.device)
+                .repeat(xs[0], 1, 1)
+                .reshape(xs[0], *xs[1:], *xs[1:])
+            )
             return jacobian
 
     # def _jacobian_wrt_input_mult_left_vec(self, x: Tensor, val: Tensor, jac_in: Tensor) -> Tensor:
     #     return jac_in
-    
-    def _jvp(self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = 'input') -> Union[Tensor, None]:
-        if wrt == 'input':
-            return vector
-        
-    def _vjp(self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = 'input') -> Union[Tensor, None]:
-        if wrt == 'input':
+
+    def _jvp(
+        self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        if wrt == "input":
             return vector
 
-    def _jmp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input') -> Union[Tensor, None]:
-        if wrt == 'input':
+    def _vjp(
+        self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        if wrt == "input":
+            return vector
+
+    def _jmp(
+        self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        if wrt == "input":
             return matrix
 
-    def _mjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input') -> Union[Tensor, None]:
-        if wrt == 'input':
+    def _mjp(
+        self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        if wrt == "input":
             return matrix
+
 
 def identity(x: Tensor) -> Tensor:
     """Function that for a given input x returns the corresponding identity jacobian matrix"""
     m = Identity()
-    #return m(x, jacobian=True)[1]
+    # return m(x, jacobian=True)[1]
     return m._jacobian(x)
-
 
 
 class AbstractJacobian:
@@ -78,30 +88,36 @@ class AbstractJacobian:
             return val, jac
         return val
 
-    def _jacobian(self, x: Tensor, val: Union[Tensor, None] = None, wrt: str = 'input') -> Union[Tensor, None]:
-        ''' Returns the Jacobian matrix '''
-        #return self._jacobian_wrt_input_mult_left_vec(x, val, identity(x))
-        #return self._jmp(x, val, identity(x))
-        #return self._mjp(x, val, identity(val), wrt = wrt)
+    def _jacobian(
+        self, x: Tensor, val: Union[Tensor, None] = None, wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        """Returns the Jacobian matrix"""
+        # return self._jacobian_wrt_input_mult_left_vec(x, val, identity(x))
+        # return self._jmp(x, val, identity(x))
+        # return self._mjp(x, val, identity(val), wrt = wrt)
         raise NotImplementedError
 
     ### forward passes ###
 
-    def jvp(self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = 'input') -> Union[Tensor, None]:
-        ''' jacobian vector product - forward '''
-        if wrt == 'weight':
+    def jvp(
+        self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        """jacobian vector product - forward"""
+        if wrt == "weight":
             raise NotImplementedError
         if val is None:
             val = self.forward(x)
         xs, vs = x.shape, val.shape
         assert vector.shape == xs
         vector = vector.reshape(xs[0], xs[1:].numel())
-        jacobian_vector_product = self._jvp(x, val, vector , wrt = wrt)
+        jacobian_vector_product = self._jvp(x, val, vector, wrt=wrt)
         return jacobian_vector_product.reshape(vs[0], *vs[1:])
 
-    def jmp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input') -> Union[Tensor, None]:
-        ''' jacobian matrix product - forward '''
-        if wrt == 'weight':
+    def jmp(
+        self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        """jacobian matrix product - forward"""
+        if wrt == "weight":
             raise NotImplementedError
         if val is None:
             val = self.forward(x)
@@ -111,14 +127,21 @@ class AbstractJacobian:
         else:
             assert matrix.shape == (xs[0], *xs[1:], *xs[1:])
         matrix = matrix.reshape(xs[0], xs[1:].numel(), xs[1:].numel())
-        jacobian_matrix_product = self._jmp(x, val, matrix , wrt = wrt)
+        jacobian_matrix_product = self._jmp(x, val, matrix, wrt=wrt)
         return jacobian_matrix_product.reshape(vs[0], *vs[1:], *vs[1:])
 
-    def jmjTp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
-        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
-        ) -> Tensor:
-        ''' jacobian matrix jacobian.T product - forward '''
-        if wrt == 'weight':
+    def jmjTp(
+        self,
+        x: Tensor,
+        val: Union[Tensor, None],
+        matrix: Union[Tensor, None],
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ) -> Tensor:
+        """jacobian matrix jacobian.T product - forward"""
+        if wrt == "weight":
             raise NotImplementedError
         if val is None:
             val = self.forward(x)
@@ -128,28 +151,32 @@ class AbstractJacobian:
         else:
             assert matrix.shape == (xs[0], *xs[1:], *xs[1:])
         matrix = matrix.reshape(xs[0], xs[1:].numel(), xs[1:].numel())
-        jacobian_matrix_jacobianT_product = self._jmjTp(x, val, matrix , wrt = wrt,
-                                                        from_diag = from_diag, to_diag = to_diag,
-                                                        diag_backprop = diag_backprop)
+        jacobian_matrix_jacobianT_product = self._jmjTp(
+            x, val, matrix, wrt=wrt, from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop
+        )
         return jacobian_matrix_jacobianT_product.reshape(vs[0], *vs[1:], *vs[1:])
 
     ### backward passes ###
 
-    def vjp(self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = 'input') -> Union[Tensor, None]:
-        ''' vector jacobian product - backward '''
+    def vjp(
+        self, x: Tensor, val: Union[Tensor, None], vector: Tensor, wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        """vector jacobian product - backward"""
         if val is None:
             val = self.forward(x)
         xs, vs = x.shape, val.shape
         assert vector.shape == vs
         vector = vector.reshape(vs[0], vs[1:].numel())
-        vector_jacobian_product = self._vjp(x, val, vector , wrt = wrt)
-        if wrt == 'input':
+        vector_jacobian_product = self._vjp(x, val, vector, wrt=wrt)
+        if wrt == "input":
             return vector_jacobian_product.reshape(xs[0], *xs[1:])
-        elif wrt == 'weight':
+        elif wrt == "weight":
             return vector_jacobian_product
 
-    def mjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input') -> Union[Tensor, None]:
-        ''' matrix jacobian product - backward '''
+    def mjp(
+        self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        """matrix jacobian product - backward"""
         if val is None:
             val = self.forward(x)
         xs, vs = x.shape, val.shape
@@ -158,16 +185,23 @@ class AbstractJacobian:
         else:
             assert matrix.shape == (vs[0], *vs[1:], *vs[1:])
         matrix = matrix.reshape(vs[0], vs[1:].numel(), vs[1:].numel())
-        matrix_jacobian_product =  self._mjp(x, val, matrix , wrt = wrt)
-        if wrt == 'input':
+        matrix_jacobian_product = self._mjp(x, val, matrix, wrt=wrt)
+        if wrt == "input":
             return matrix_jacobian_product.reshape(xs[0], *xs[1:], *xs[1:])
-        elif wrt == 'weight':
+        elif wrt == "weight":
             return matrix_jacobian_product
 
-    def jTmjp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input', 
-        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
-        ) -> Union[Tensor, List[Tensor], None]:
-        ''' jacobian.T matrix jacobian product - backward '''
+    def jTmjp(
+        self,
+        x: Tensor,
+        val: Union[Tensor, None],
+        matrix: Union[Tensor, None],
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ) -> Union[Tensor, List[Tensor], None]:
+        """jacobian.T matrix jacobian product - backward"""
         if val is None:
             val = self.forward(x)
         xs, vs = x.shape, val.shape
@@ -176,74 +210,102 @@ class AbstractJacobian:
         else:
             assert matrix.shape == (vs[0], *vs[1:], *vs[1:])
         matrix = matrix.reshape(vs[0], vs[1:].numel(), vs[1:].numel())
-        jacobianT_matrix_jacobian_product = self._jTmjp(x, val, matrix , wrt = wrt,
-                                                        from_diag = from_diag, to_diag = to_diag,
-                                                        diag_backprop = diag_backprop)
-        if wrt == 'input':
+        jacobianT_matrix_jacobian_product = self._jTmjp(
+            x, val, matrix, wrt=wrt, from_diag=from_diag, to_diag=to_diag, diag_backprop=diag_backprop
+        )
+        if wrt == "input":
             return jacobianT_matrix_jacobian_product.reshape(xs[0], *xs[1:], *xs[1:])
-        elif wrt == 'weight':
+        elif wrt == "weight":
             return jacobianT_matrix_jacobian_product
-    
-    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Tensor, val2: Tensor, 
-        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
-        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
-        ): #-> Union[Tensor, Tuple]:
-        '''  jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms) '''
-        assert x1.shape == x2.shape
 
+    def _jTmjp_batch2(
+        self,
+        x1: Tensor,
+        x2: Tensor,
+        val1: Tensor,
+        val2: Tensor,
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None],
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ):  # -> Union[Tensor, Tuple]:
+        """jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)"""
+        assert x1.shape == x2.shape
 
     # slow implementations, to be overwritten by each module for efficient computation
-    def _jvp(self, x: Tensor, val: Tensor, vector: Tensor, wrt: str = 'input') -> Union[Tensor, None]:
+    def _jvp(self, x: Tensor, val: Tensor, vector: Tensor, wrt: str = "input") -> Union[Tensor, None]:
         print(f"Ei! I'm doing this in the stupid way! ({self})")
-        jacobian = self._jacobian(x, val, wrt = wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
+        jacobian = self._jacobian(x, val, wrt=wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
         return torch.einsum("bij,bj->bi", jacobian, vector)
 
-    def _jmp(self, x: Tensor, val: Tensor, matrix: Tensor, wrt: str = 'input') -> Union[Tensor, None]:
+    def _jmp(self, x: Tensor, val: Tensor, matrix: Tensor, wrt: str = "input") -> Union[Tensor, None]:
         print(f"Ei! I'm doing this in the stupid way! ({self})")
-        jacobian = self._jacobian(x, val, wrt = wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
+        jacobian = self._jacobian(x, val, wrt=wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
         return torch.einsum("bij,bjk->bik", jacobian, matrix)
 
-    def _jmjTp(self, x: Tensor, val: Tensor, matrix: Tensor, wrt: str = 'input', 
-        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
-        ) -> Tensor:
+    def _jmjTp(
+        self,
+        x: Tensor,
+        val: Tensor,
+        matrix: Tensor,
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ) -> Tensor:
         print(f"Ei! I'm doing this in the stupid way! ({self})")
         if from_diag or to_diag or diag_backprop:
             raise NotImplementedError
-        jacobian = self._jacobian(x, val, wrt = wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
+        jacobian = self._jacobian(x, val, wrt=wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
         return torch.einsum("bij,bjk,blk->bil", jacobian, matrix, jacobian)
 
-    def _vjp(self, x: Tensor, val: Tensor, vector: Tensor, wrt: str = 'input') -> Union[Tensor, None]:
+    def _vjp(self, x: Tensor, val: Tensor, vector: Tensor, wrt: str = "input") -> Union[Tensor, None]:
         print(f"Ei! I'm doing this in the stupid way! ({self})")
-        jacobian = self._jacobian(x, val, wrt = wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
+        jacobian = self._jacobian(x, val, wrt=wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
         return torch.einsum("bi,bij->bj", vector, jacobian)
 
-    def _mjp(self, x: Tensor, val: Tensor, matrix: Tensor, wrt: str = 'input') -> Union[Tensor, None]:
+    def _mjp(self, x: Tensor, val: Tensor, matrix: Tensor, wrt: str = "input") -> Union[Tensor, None]:
         print(f"Ei! I'm doing this in the stupid way! ({self})")
-        jacobian = self._jacobian(x, val, wrt = wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
+        jacobian = self._jacobian(x, val, wrt=wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
         return torch.einsum("bij,bjk->bik", matrix, jacobian)
-    
-    def _jTmjp(self, x: Tensor, val: Tensor, matrix: Tensor, wrt: str = 'input', 
-        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
-        ) -> Union[Tensor, List[Tensor], None]:
+
+    def _jTmjp(
+        self,
+        x: Tensor,
+        val: Tensor,
+        matrix: Tensor,
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ) -> Union[Tensor, List[Tensor], None]:
         print(f"Ei! I'm doing this in the stupid way! ({self})")
         if from_diag or to_diag or diag_backprop:
             raise NotImplementedError
-        jacobian = self._jacobian(x, val, wrt = wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
+        jacobian = self._jacobian(x, val, wrt=wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
         return torch.einsum("bji,bjk,bkl->bil", jacobian, matrix, jacobian)
 
-    def _jTmjp_batch2(self, x1: Tensor, x2: Tensor, val1: Union[Tensor, None], val2: Union[Tensor, None], 
-        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None], wrt: str = 'input', 
-        from_diag: bool = False, to_diag: bool = False, diag_backprop: bool = False
-        ): #-> Union[Tensor, Tuple]:
-        '''
+    def _jTmjp_batch2(
+        self,
+        x1: Tensor,
+        x2: Tensor,
+        val1: Union[Tensor, None],
+        val2: Union[Tensor, None],
+        matrixes: Union[Tuple[Tensor, Tensor, Tensor], None],
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ):  # -> Union[Tensor, Tuple]:
+        """
         jacobian.T matrix jacobian product, computed on 2 inputs (considering cross terms)
-        '''
+        """
         assert x1.shape == x2.shape
         print(f"Ei! I'm doing this in the stupid way! ({self})")
         if from_diag or to_diag or diag_backprop:
             raise NotImplementedError
-        jacobian = self._jacobian(x, val, wrt = wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
-
+        jacobian = self._jacobian(x, val, wrt=wrt).reshape(val.shape[0], val.shape[:1].numel(), -1)
 
 
 class Sequential(nn.Sequential):
@@ -252,7 +314,7 @@ class Sequential(nn.Sequential):
     def __init__(self, *args, add_hooks: bool = False):
         super().__init__(*args)
         self._modules_list = list(self._modules.values())
-        
+
         self.add_hooks = add_hooks
         if self.add_hooks:
             self.feature_maps = []
@@ -277,7 +339,7 @@ class Sequential(nn.Sequential):
         for module in self._modules.values():
             val = module(x)
             if not (jacobian is False):
-                #j = module._jacobian_wrt_input_mult_left_vec(x, val, j)
+                # j = module._jacobian_wrt_input_mult_left_vec(x, val, j)
                 j = module._jmp(x, val, j)
             x = val
         if not (jacobian is False):
@@ -929,8 +991,6 @@ class SkipConnection(nn.Module):
             )
         elif wrt == "weight":
             return jTmjps
-
-
 
 
 class Linear(AbstractJacobian, nn.Linear):
@@ -4091,17 +4151,17 @@ class RBF(nn.Module):
         x_norm = (x**2).sum(1).view(-1, 1)
         points_norm = (self.points**2).sum(1).view(1, -1)
         d2 = x_norm + points_norm - 2.0 * torch.mm(x, self.points.transpose(0, 1))
-        return d2.clamp(min=0.0) # NxM
-        #if x.dim() is 2:
+        return d2.clamp(min=0.0)  # NxM
+        # if x.dim() is 2:
         #    x = x.unsqueeze(0) # BxNxD
-        #x_norm = (x**2).sum(-1, keepdim=True) # BxNx1
-        #points_norm = (self.points**2).sum(-1, keepdim=True).view(1, 1, -1) # 1x1xM
-        #d2 = x_norm + points_norm - 2.0 * torch.bmm(x, self.points.t().unsqueeze(0).expand(x.shape[0], -1, -1))
-        #return d2.clamp(min=0.0) # BxNxM
+        # x_norm = (x**2).sum(-1, keepdim=True) # BxNx1
+        # points_norm = (self.points**2).sum(-1, keepdim=True).view(1, 1, -1) # 1x1xM
+        # d2 = x_norm + points_norm - 2.0 * torch.bmm(x, self.points.t().unsqueeze(0).expand(x.shape[0], -1, -1))
+        # return d2.clamp(min=0.0) # BxNxM
 
     def forward(self, x, jacobian=False):
-        D2 = self.__dist2__(x) # (batch)-by-|x|-by-|points|
-        val = torch.exp(-self.beta * D2) # (batch)-by-|x|-by-|points|
+        D2 = self.__dist2__(x)  # (batch)-by-|x|-by-|points|
+        val = torch.exp(-self.beta * D2)  # (batch)-by-|x|-by-|points|
 
         if jacobian:
             J = self._jacobian(x, val)
@@ -4110,17 +4170,19 @@ class RBF(nn.Module):
             return val
 
     def _jacobian(self, x, val):
-        T1 = (-2.0 * self.beta * val) # BxNxM
-        T2 = (x.unsqueeze(1) - self.points.unsqueeze(0))
+        T1 = -2.0 * self.beta * val  # BxNxM
+        T2 = x.unsqueeze(1) - self.points.unsqueeze(0)
         J = T1.unsqueeze(-1) * T2
         return J
 
-    def _jmp(self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = 'input') -> Union[Tensor, None]:
-        '''
+    def _jmp(
+        self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = "input"
+    ) -> Union[Tensor, None]:
+        """
         jacobian matrix product
-        '''
-        if wrt=='input':
-            jacobian = self._jacobian(x,val)
+        """
+        if wrt == "input":
+            jacobian = self._jacobian(x, val)
             return torch.einsum("bij,bjk->bik", jacobian, matrix)
-        elif wrt=='weight':
+        elif wrt == "weight":
             return None

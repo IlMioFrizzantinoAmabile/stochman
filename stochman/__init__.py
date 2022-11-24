@@ -44,4 +44,9 @@ else:
 
     # import classes for direct access
     from stochman.curves import CubicSpline, DiscreteCurve
-    from stochman.hessian import MSEHessianCalculator, BCEHessianCalculator, ContrastiveHessianCalculator, ArccosHessianCalculator
+    from stochman.hessian import (
+        MSEHessianCalculator,
+        BCEHessianCalculator,
+        ContrastiveHessianCalculator,
+        ArccosHessianCalculator,
+    )

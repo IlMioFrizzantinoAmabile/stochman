@@ -85,7 +85,12 @@ class MSEHessianCalculator(HessianCalculator):
         with torch.no_grad():
             # backpropagate through the network
             Jt_J = nnj_module._jTmjp(
-                x, None, None, wrt=self.wrt, to_diag=self.shape == "diagonal", diag_backprop=self.speed == "fast"
+                x,
+                None,
+                None,
+                wrt=self.wrt,
+                to_diag=self.shape == "diagonal",
+                diag_backprop=self.speed == "fast",
             )
             # average along batch size
             Jt_J = torch.mean(Jt_J, dim=0)
@@ -271,6 +276,7 @@ def _arccos(z1, z2):
     z2_norm = torch.sum(z2**2, dim=1) ** (0.5)
     return 0.5 * torch.einsum("bi,bi->b", z1, z2) / (z1_norm * z2_norm)
 
+
 def _arccos_hessian(z1, z2):
     z1_norm = torch.sum(z1**2, dim=1) ** (0.5)
     z2_norm = torch.sum(z2**2, dim=1) ** (0.5)
@@ -300,6 +306,7 @@ def _arccos_hessian(z1, z2):
     H_22_normalized = torch.einsum("bij,b->bij", H_22, 1 / (z2_norm**2))
     return tuple((H_11_normalized, H_12_normalized, H_22_normalized))
 
+
 class ArccosHessianCalculator(HessianCalculator):
     def compute_loss(self, x, nnj_module, tuple_indices):
         """
@@ -307,13 +314,6 @@ class ArccosHessianCalculator(HessianCalculator):
                = 0.5 * || x / ||x|| - y / ||y|| || - 1    # arccos distance is equivalent to contrastive distance & normalization layer
         Arcos(x, tuples) = sum_positives L(x,y) - sum_negatives L(x,y)
         """
-
-        def _arccos(x1, x2):
-            z1 = nnj_module(x1)
-            z2 = nnj_module(x2)
-            z1_norm = torch.sum(z1**2, dim=1) ** (0.5)
-            z2_norm = torch.sum(z2**2, dim=1) ** (0.5)
-            return 0.5 * torch.einsum("bi,bi->b", z1, z2) / (z1_norm * z2_norm)
 
         # unpack tuple indices
         if len(tuple_indices) == 3:
@@ -356,14 +356,16 @@ class ArccosHessianCalculator(HessianCalculator):
 
             if self.loss_func == "arccos_full" or self.loss_func == "arccos_pos":
 
+                ###
                 # compute positive part
-                
+                ###
+
                 # forward pass
                 z1, z2 = nnj_module(x[ap]), nnj_module(x[p])
 
                 # initialize the hessian of the loss
                 H = _arccos_hessian(z1, z2)
-                
+
                 # backpropagate through the network
                 pos = nnj_module._jTmjp_batch2(
                     x[ap],
@@ -390,7 +392,9 @@ class ArccosHessianCalculator(HessianCalculator):
                 if self.loss_func == "arccos_pos":
                     return pos
 
+                ###
                 # compute negative part
+                ###
 
                 # forward pass
                 z1, z2 = nnj_module(x[an]), nnj_module(x[n])
