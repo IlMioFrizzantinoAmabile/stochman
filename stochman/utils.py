@@ -1,6 +1,7 @@
 import torch
 from stochman import nnj
 
+
 def convert_to_stochman(sequential):
 
     model = []
@@ -9,12 +10,14 @@ def convert_to_stochman(sequential):
         if layer.__class__.__name__ == "Linear":
             stochman_layer = getattr(nnj, layer.__class__.__name__)(layer.in_features, layer.out_features)
         elif layer.__class__.__name__ == "Conv2d":
-            stochman_layer = getattr(nnj, layer.__class__.__name__)(layer.in_channel, layer.out_channel, layer.kernel)
+            stochman_layer = getattr(nnj, layer.__class__.__name__)(
+                layer.in_channel, layer.out_channel, layer.kernel
+            )
         else:
             stochman_layer = getattr(nnj, layer.__class__.__name__)()
 
         model.append(stochman_layer)
-
+    
     model = nnj.Sequential(*model, add_hooks=True)
 
     return model
