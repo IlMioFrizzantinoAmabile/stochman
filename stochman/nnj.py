@@ -276,11 +276,6 @@ class Sequential(nn.Sequential):
             j = identity(x) if (not isinstance(jacobian, Tensor) and jacobian) else jacobian
         for module in self._modules.values():
             val = module(x)
-<<<<<<< HEAD
-=======
-            # val = module.forward(x)
-            # self.feature_maps.append(val.detach())
->>>>>>> fdb1e2cb229a69662aa9272796af37d2eddb8807
             if not (jacobian is False):
                 #j = module._jacobian_wrt_input_mult_left_vec(x, val, j)
                 j = module._jmp(x, val, j)
@@ -2867,17 +2862,10 @@ class Reshape(AbstractJacobian, nn.Module):
     ) -> Tensor:
         """
         jacobian matrix product
-<<<<<<< HEAD
-        '''
-        if wrt=='input':
-            return matrix
-        elif wrt=='weight':
-=======
         """
         if wrt == "input":
-            raise NotImplementedError
+            return matrix
         elif wrt == "weight":
->>>>>>> fdb1e2cb229a69662aa9272796af37d2eddb8807
             return None
 
     def _mjp(
@@ -3059,24 +3047,6 @@ class Flatten(AbstractJacobian, nn.Module):
         if wrt == "input":
             return vector
         elif wrt == "weight":
-            return None
-
-    def _jmp(
-        self, x: Tensor, val: Union[Tensor, None], matrix: Union[Tensor, None], wrt: str = "input"
-    ) -> Tensor:
-        """
-        jacobian matrix product
-<<<<<<< HEAD
-        '''
-        if wrt=='input':
-            return matrix
-        elif wrt=='weight':
-=======
-        """
-        if wrt == "input":
-            raise NotImplementedError
-        elif wrt == "weight":
->>>>>>> fdb1e2cb229a69662aa9272796af37d2eddb8807
             return None
 
     def _mjp(
