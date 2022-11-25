@@ -78,7 +78,12 @@ class MSEHessianCalculator(HessianCalculator):
         with torch.no_grad():
             # backpropagate through the network
             Jt_J = nnj_module._jTmjp(
-                x, None, None, wrt=self.wrt, to_diag=self.shape == "diagonal", diag_backprop=self.speed == "fast"
+                x,
+                None,
+                None,
+                wrt=self.wrt,
+                to_diag=self.shape == "diagonal",
+                diag_backprop=self.speed == "fast",
             )
             # average along batch size
             Jt_J = torch.mean(Jt_J, dim=0)
@@ -330,6 +335,7 @@ def _arccos(z1, z2):
     z2_norm = torch.sum(z2**2, dim=1) ** (0.5)
     return 0.5 * torch.einsum("bi,bi->b", z1, z2) / (z1_norm * z2_norm)
 
+
 def _arccos_hessian(z1, z2):
     z1_norm = torch.sum(z1**2, dim=1) ** (0.5)
     z2_norm = torch.sum(z2**2, dim=1) ** (0.5)
@@ -374,6 +380,11 @@ class ArccosHessianCalculator(HessianCalculator):
     """
 
     def compute_loss(self, x, nnj_module, tuple_indices):
+        """
+        L(x,y) = 0.5 * sum_i x_i * y_i
+               = 0.5 * || x / ||x|| - y / ||y|| || - 1    # arccos distance is equivalent to contrastive distance & normalization layer
+        Arcos(x, tuples) = sum_positives L(x,y) - sum_negatives L(x,y)
+        """
 
         # unpack tuple indices
         if len(tuple_indices) == 3:
@@ -416,14 +427,16 @@ class ArccosHessianCalculator(HessianCalculator):
 
             if self.method == "full" or self.method == "pos":
 
+                ###
                 # compute positive part
-                
+                ###
+
                 # forward pass
                 z1, z2 = nnj_module(x[ap]), nnj_module(x[p])
 
                 # initialize the hessian of the loss
                 H = _arccos_hessian(z1, z2)
-                
+
                 # backpropagate through the network
                 pos = nnj_module._jTmjp_batch2(
                     x[ap],
@@ -450,7 +463,9 @@ class ArccosHessianCalculator(HessianCalculator):
                 if self.method == "pos":
                     return pos
 
+                ###
                 # compute negative part
+                ###
 
                 # forward pass
                 z1, z2 = nnj_module(x[an]), nnj_module(x[n])

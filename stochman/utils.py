@@ -17,7 +17,7 @@ def convert_to_stochman(sequential):
             stochman_layer = getattr(nnj, layer.__class__.__name__)()
 
         model.append(stochman_layer)
-    
+
     model = nnj.Sequential(*model, add_hooks=True)
 
     return model
