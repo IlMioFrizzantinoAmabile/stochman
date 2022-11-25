@@ -175,7 +175,7 @@ class CEHessianCalculator(HessianCalculator):
                 diag_backprop=self.speed == "fast",
             )
             # backpropagate through the network the outer product   
-            softmax_J = nnj_module._mjp(
+            softmax_J = nnj_module._vjp(
                 x,
                 val,
                 softmax,
