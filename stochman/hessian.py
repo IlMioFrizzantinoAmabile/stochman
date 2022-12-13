@@ -41,7 +41,11 @@ class HessianCalculator(ABC, nn.Module):
 
 class MSEHessianCalculator(HessianCalculator):
     " Mean Square Error "
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
+        assert self.method == ""
+    
     def compute_loss(self, x, target, nnj_module, tuple_indices=None):
 
         val = nnj_module(x)
@@ -92,6 +96,10 @@ class MSEHessianCalculator(HessianCalculator):
 
 class BCEHessianCalculator(HessianCalculator):
     " Binary Cross Entropy "
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        assert self.method == ""
 
     def compute_loss(self, x, target, nnj_module, tuple_indices=None):
 
@@ -130,12 +138,17 @@ class BCEHessianCalculator(HessianCalculator):
             Jt_H_J = torch.mean(Jt_H_J, dim=0)
             return Jt_H_J
 
+
 class CEHessianCalculator(HessianCalculator):
     " Multi-Class Cross Entropy "
     # only support one point prediction (for now)
     # for example: 
     #       - mnisst classification: OK
     #       - image pixelwise classification: NOT OK
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        assert self.method == ""
 
     def compute_loss(self, x, target, nnj_module, tuple_indices=None):
 
@@ -206,6 +219,11 @@ class ContrastiveHessianCalculator(HessianCalculator):
     and
         self.method == "fix"
     """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        assert self.method in ("full", "fix", "pos")
+
     def compute_loss(self, x, target, nnj_module, tuple_indices):
 
         # unpack tuple indices
@@ -378,6 +396,10 @@ class ArccosHessianCalculator(HessianCalculator):
     and
         self.method == "fix"
     """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        assert self.method in ("full", "fix", "pos")
 
     def compute_loss(self, x, nnj_module, tuple_indices):
         """
