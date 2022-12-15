@@ -9,10 +9,14 @@ def convert_to_stochman(sequential):
 
         if layer.__class__.__name__ == "Linear":
             stochman_layer = getattr(nnj, layer.__class__.__name__)(layer.in_features, layer.out_features)
+            stochman_layer.weight.data = layer.weight.data
+            stochman_layer.bias.data = layer.bias.data
         elif layer.__class__.__name__ == "Conv2d":
             stochman_layer = getattr(nnj, layer.__class__.__name__)(
                 layer.in_channel, layer.out_channel, layer.kernel
             )
+            stochman_layer.weight.data = layer.weight.data
+            stochman_layer.bias.data = layer.bias.data
         else:
             stochman_layer = getattr(nnj, layer.__class__.__name__)()
 
