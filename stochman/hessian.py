@@ -332,7 +332,6 @@ class ContrastiveHessianCalculator(HessianCalculator):
                 )
                 # sum along batch size
                 pos = torch.sum(pos, dim=0)
-                print(pos[0], pos.shape)
 
                 # compute negative part
                 neg = nnj_module._jTmjp(
