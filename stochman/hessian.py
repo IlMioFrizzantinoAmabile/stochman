@@ -279,11 +279,7 @@ class ContrastiveHessianCalculator(HessianCalculator):
                     diag_backprop=self.speed == "fast",
                 )
                 if self.shape == "diagonal":
-                    if self.wrt == "weight":
-                        pos = [matrixes[0] - 2 * matrixes[1] + matrixes[2] for matrixes in pos]
-                        pos = torch.cat(pos, dim=1)
-                    else:
-                        pos = pos[0] - 2 * pos[1] + pos[2]
+                    pos = pos[0] - 2 * pos[1] + pos[2]
                 else:
                     raise NotImplementedError
                 # sum along batch size
@@ -304,11 +300,7 @@ class ContrastiveHessianCalculator(HessianCalculator):
                     diag_backprop=self.speed == "fast",
                 )
                 if self.shape == "diagonal":
-                    if self.wrt == "weight":
-                        neg = [matrixes[0] - 2 * matrixes[1] + matrixes[2] for matrixes in neg]
-                        neg = torch.cat(neg, dim=1)
-                    else:
-                        neg = neg[0] - 2 * neg[1] + neg[2]
+                    neg = neg[0] - 2 * neg[1] + neg[2]
                 else:
                     raise NotImplementedError
                 # sum along batch size
@@ -472,11 +464,7 @@ class ArccosHessianCalculator(HessianCalculator):
                     diag_backprop=self.speed == "fast",
                 )
                 if self.shape == "diagonal":
-                    if self.wrt == "weight":
-                        pos = [matrixes[0] - 2 * matrixes[1] + matrixes[2] for matrixes in pos]
-                        pos = torch.cat(pos, dim=1)
-                    else:
-                        pos = pos[0] - 2 * pos[1] + pos[2]
+                    pos = pos[0] - 2 * pos[1] + pos[2]
                 else:
                     raise NotImplementedError
                 # sum along batch size
@@ -508,11 +496,7 @@ class ArccosHessianCalculator(HessianCalculator):
                     diag_backprop=self.speed == "fast",
                 )
                 if self.shape == "diagonal":
-                    if self.wrt == "weight":
-                        neg = [matrixes[0] - 2 * matrixes[1] + matrixes[2] for matrixes in neg]
-                        neg = torch.cat(neg, dim=1)
-                    else:
-                        neg = neg[0] - 2 * neg[1] + neg[2]
+                    neg = neg[0] - 2 * neg[1] + neg[2]
                 else:
                     raise NotImplementedError
                 # sum along batch size
