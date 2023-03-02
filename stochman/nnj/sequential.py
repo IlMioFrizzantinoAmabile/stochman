@@ -115,6 +115,46 @@ class Sequential(AbstractJacobian, nn.Sequential):
         elif wrt == "input":
             return matrix
 
+    def _jmjTp(
+        self,
+        x: Tensor,
+        val: Union[Tensor, None],
+        matrix: Union[Tensor, None],
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ) -> Union[Tensor, Tuple]:
+        """
+        jacobian matrix jacobian.T product
+        """
+        if matrix is None:
+            matrix = torch.ones_like(x)
+            from_diag = True
+        # forward pass
+        if val is None:
+            val = self.forward(x)
+        # forward pass again
+        ms = []
+        for k in range(len(self._modules_list)):
+            # propagate through the weight
+            if wrt == "weight":
+                raise NotImplementedError
+            # propagate through the input
+            matrix = self._modules_list[k]._jmjTp(
+                self.feature_maps[k],
+                self.feature_maps[k + 1],
+                matrix,
+                wrt="input",
+                from_diag=from_diag if k == 0 else diag_backprop,
+                to_diag=to_diag if k == len(self._modules_list) - 1 else diag_backprop,
+                diag_backprop=diag_backprop,
+            )
+        if wrt == "input":
+            return matrix
+        elif wrt == "weight":
+            raise NotImplementedError
+
     def _jTmjp(
         self,
         x: Tensor,
@@ -132,7 +172,7 @@ class Sequential(AbstractJacobian, nn.Sequential):
         if val is None:
             val = self.forward(x)
         if matrix is None:
-            matrix = torch.ones_like(val)
+            matrix = torch.ones((val.shape[0], val.shape[1:].numel()))
             from_diag = True
         # backward pass
         ms = []

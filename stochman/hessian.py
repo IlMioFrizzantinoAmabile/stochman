@@ -48,15 +48,20 @@ class MSEHessianCalculator(HessianCalculator):
     
     def compute_loss(self, x, target, nnj_module, tuple_indices=None):
 
-        val = nnj_module(x)
-        assert val.shape == target.shape
+        with torch.no_grad():
+            val = nnj_module(x)
+            assert val.shape == target.shape
 
-        # compute Gaussian log-likelihood
-        mse = 0.5 * (val - target) ** 2
+            # compute Gaussian log-likelihood
+            mse = 0.5 * (val - target) ** 2
 
-        # average along batch size
-        mse = torch.mean(mse, dim=0)
-        return mse
+            # average along batch size
+            mse = torch.mean(mse, dim=0)
+
+            # sum along other dimensions
+            mse = torch.sum(mse)
+
+            return mse
 
     def compute_gradient(self, x, target, nnj_module, tuple_indices=None):
 
@@ -68,7 +73,8 @@ class MSEHessianCalculator(HessianCalculator):
             gradient = val - target
 
             # backpropagate through the network
-            gradient = (nnj_module._vjp(x, val, gradient, wrt=self.wrt),)
+            gradient = gradient.reshape(val.shape[0], -1)
+            gradient = nnj_module._vjp(x, val, gradient, wrt=self.wrt)
 
             # average along batch size
             gradient = torch.mean(gradient, dim=0)
@@ -80,10 +86,12 @@ class MSEHessianCalculator(HessianCalculator):
         # H = identity matrix (None is interpreted as identity by jTmjp)
 
         with torch.no_grad():
+            val = nnj_module(x)
+
             # backpropagate through the network
             Jt_J = nnj_module._jTmjp(
                 x,
-                None,
+                val,
                 None,
                 wrt=self.wrt,
                 to_diag=self.shape == "diagonal",
@@ -103,18 +111,35 @@ class BCEHessianCalculator(HessianCalculator):
 
     def compute_loss(self, x, target, nnj_module, tuple_indices=None):
 
-        val = nnj_module(x)
-        assert val.shape == target.shape
+        with torch.no_grad():
+            val = nnj_module(x)
+            assert val.shape == target.shape
 
-        bernoulli_p = torch.exp(val) / (1 + torch.exp(val))
-        cross_entropy = -(target * torch.log(bernoulli_p) + (1 - target) * torch.log(bernoulli_p))
+            bernoulli_p = torch.exp(val) / (1 + torch.exp(val))
+            cross_entropy = -(target * torch.log(bernoulli_p) + (1 - target) * torch.log(1 - bernoulli_p))
 
-        # average along batch size
-        cross_entropy = torch.mean(cross_entropy, dim=0)
-        return cross_entropy
+            # average along batch size
+            cross_entropy = torch.mean(cross_entropy, dim=0)
+            # sum along other dimensions
+            cross_entropy = torch.sum(cross_entropy)
+            return cross_entropy
 
     def compute_gradient(self, x, target, nnj_module, tuple_indices=None):
-        raise NotImplementedError
+        
+        with torch.no_grad():
+            val = nnj_module(x)
+            assert val.shape == target.shape
+
+            bernoulli_p = torch.exp(val) / (1 + torch.exp(val))
+            gradient = bernoulli_p - target
+
+            # backpropagate through the network
+            gradient = gradient.reshape(val.shape[0], -1)
+            gradient = nnj_module._vjp(x, val, gradient, wrt=self.wrt)
+
+            # average along batch size
+            gradient = torch.mean(gradient, dim=0)
+            return gradient
 
     def compute_hessian(self, x, nnj_module, tuple_indices=None):
 
@@ -122,7 +147,8 @@ class BCEHessianCalculator(HessianCalculator):
             val = nnj_module(x)
 
             bernoulli_p = torch.exp(val) / (1 + torch.exp(val))
-            H = bernoulli_p - bernoulli_p**2  # hessian in diagonal form
+            H = bernoulli_p - bernoulli_p**2  
+            H = H.reshape(val.shape[0], -1) # hessian in diagonal form
 
             # backpropagate through the network
             Jt_H_J = nnj_module._jTmjp(
@@ -143,69 +169,158 @@ class CEHessianCalculator(HessianCalculator):
     " Multi-Class Cross Entropy "
     # only support one point prediction (for now)
     # for example: 
-    #       - mnisst classification: OK
+    #       - mnist classification: OK
     #       - image pixelwise classification: NOT OK
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
         assert self.method == ""
 
-    def compute_loss(self, x, target, nnj_module, tuple_indices=None):
-
-        val = nnj_module(x)
-        assert val.shape == target.shape
-
-        log_normalization = torch.log(torch.sum(torch.exp(val), dim = 1))
-        cross_entropy = -(target * val) + log_normalization
-
-        # average along batch size
-        cross_entropy = torch.mean(cross_entropy, dim=0)
-        return cross_entropy
-
-    def compute_gradient(self, x, target, nnj_module, tuple_indices=None):
-        raise NotImplementedError
-
-    def compute_hessian(self, x, nnj_module, tuple_indices=None):
+    def compute_loss(self, x, target, nnj_module, tuple_indices=None, reshape=None):
 
         with torch.no_grad():
             val = nnj_module(x)
+            if reshape is not None:
+                val = val.reshape(val.shape[0], *reshape)
+            assert val.shape == target.shape
+            if len(val.shape)!=2 and len(val.shape)!=3:
+                raise ValueError("Ei I need logits to be either 1d or 2d tensors (+ batch size)")
+
+            log_normalization = torch.log(torch.sum(torch.exp(val), dim = -1)).unsqueeze(-1).expand(val.shape)
+            cross_entropy = -(target * val) + log_normalization
+            #print(torch.sum(log_normalization), torch.sum(target * val))
+            cross_entropy = torch.sum(cross_entropy, dim=-1)
+
+            # average along multiple points (if any)
+            if len(val.shape)==3:
+                cross_entropy = torch.mean(cross_entropy, dim=1)
+            # average along batch size
+            cross_entropy = torch.mean(cross_entropy, dim=0)
+            return cross_entropy
+
+    def compute_gradient(self, x, target, nnj_module, tuple_indices=None, reshape=None):
+        
+        with torch.no_grad():
+            val = nnj_module(x)
+            if reshape is not None:
+                val = val.reshape(val.shape[0], *reshape)
+            assert val.shape == target.shape
 
             exp_val = torch.exp(val)
-            softmax = torch.einsum("bi,b->bi", exp_val, 1./torch.sum(exp_val, dim = 1) )
+            softmax = torch.einsum("b...i,b...->b...i", exp_val, 1./torch.sum(exp_val, dim = -1) )
 
-            # hessian = diag(softmax) - softmax.T * softmax
-            # thus Jt * hessian * J = Jt * diag(softmax) * J - Jt * softmax.T * softmax * J
+            # compute gradient of the Bernoulli log-likelihood
+            gradient = softmax - target
 
-
-            # backpropagate through the network the diagonal part
-            Jt_diag_J = nnj_module._jTmjp(
-                x,
-                val,
-                softmax,
-                wrt=self.wrt,
-                from_diag=True,
-                to_diag=self.shape == "diagonal",
-                diag_backprop=self.speed == "fast",
-            )
-            # backpropagate through the network the outer product   
-            softmax_J = nnj_module._vjp(
-                x,
-                val,
-                softmax,
-                wrt=self.wrt
-            )
-            if self.shape == "diagonal":
-                Jt_outer_J = torch.einsum("bi,bi->bi", softmax_J, softmax_J)
-            else:
-                Jt_outer_J = torch.einsum("bi,bj->bij", softmax_J, softmax_J)
-
-            # add the backpropagated quantities
-            Jt_H_J = Jt_diag_J - Jt_outer_J
+            # backpropagate through the network
+            gradient = gradient.reshape(val.shape[0], -1)
+            gradient = nnj_module._vjp(x, val, gradient, wrt=self.wrt)
 
             # average along batch size
-            Jt_H_J = torch.mean(Jt_H_J, dim=0)
-            return Jt_H_J
+            gradient = torch.mean(gradient, dim=0)
+            return gradient
 
+    def compute_hessian(self, x, nnj_module, tuple_indices=None, save_memory=False, reshape=None):
+
+        with torch.no_grad():
+            val = nnj_module(x)
+            if reshape is not None:
+                val = val.reshape(val.shape[0], *reshape)
+
+            if len(val.shape)==2:
+                #single point classification
+
+                exp_val = torch.exp(val)
+                softmax = torch.einsum("bi,b->bi", exp_val, 1./torch.sum(exp_val, dim = 1) )
+
+                # hessian = diag(softmax) - softmax.T * softmax
+                # thus Jt * hessian * J = Jt * diag(softmax) * J - Jt * softmax.T * softmax * J
+
+
+                # backpropagate through the network the diagonal part
+                Jt_diag_J = nnj_module._jTmjp(
+                    x,
+                    val,
+                    softmax,
+                    wrt=self.wrt,
+                    from_diag=True,
+                    to_diag=self.shape == "diagonal",
+                    diag_backprop=self.speed == "fast",
+                )
+                # backpropagate through the network the outer product   
+                softmax_J = nnj_module._vjp(
+                    x,
+                    val,
+                    softmax,
+                    wrt=self.wrt
+                )
+                if self.shape == "diagonal":
+                    Jt_outer_J = torch.einsum("bi,bi->bi", softmax_J, softmax_J)
+                else:
+                    Jt_outer_J = torch.einsum("bi,bj->bij", softmax_J, softmax_J)
+
+                # add the backpropagated quantities
+                Jt_H_J = Jt_diag_J - Jt_outer_J
+
+                # average along batch size
+                Jt_H_J = torch.mean(Jt_H_J, dim=0)
+                return Jt_H_J
+
+            if len(val.shape)==3:
+                #multi point classification
+
+                b, p, c = val.shape
+
+                exp_val = torch.exp(val)
+                softmax = torch.einsum("bpi,bp->bpi", exp_val, 1./torch.sum(exp_val, dim = 2) )
+
+                # backpropagate through the network the diagonal part
+                diagonal = softmax.reshape(val.shape[0], val.shape[1:].numel())
+                Jt_diag_J = nnj_module._jTmjp(
+                    x,
+                    val,
+                    diagonal,
+                    wrt=self.wrt,
+                    from_diag=True,
+                    to_diag=self.shape == "diagonal",
+                    diag_backprop=self.speed == "fast",
+                )
+                # backpropagate through the network the outer product  
+                if save_memory:
+                    Jt_outer_J = torch.zeros_like(Jt_diag_J)
+                    for point in range(p):
+                        vector = torch.zeros(b,p*c)
+                        vector[:, point*c : (point+1)*c] = softmax[:, point, :]
+                        softmax_J = nnj_module._vjp(
+                            x,
+                            val,
+                            vector,
+                            wrt=self.wrt
+                        )
+                        if self.shape == "diagonal":
+                            Jt_outer_J += torch.einsum("bi,bi->bi", softmax_J, softmax_J)
+                        else:
+                            Jt_outer_J += torch.einsum("bi,bj->bij", softmax_J, softmax_J)
+                else:
+                    pos_identity = torch.diag_embed(torch.ones(p, device=val.device))
+                    matrix = torch.einsum("bpi,pq->bpqi", softmax, pos_identity).reshape(b, p, p*c)
+                    softmax_J = nnj_module._mjp(
+                        x,
+                        val,
+                        matrix,
+                        wrt=self.wrt
+                    )
+                    if self.shape == "diagonal":
+                        Jt_outer_J = torch.einsum("bki,bki->bi", softmax_J, softmax_J)
+                    else:
+                        Jt_outer_J = torch.einsum("bki,bkj->bij", softmax_J, softmax_J)
+
+                # add the backpropagated quantities
+                Jt_H_J = Jt_diag_J - Jt_outer_J
+
+                # average along batch size
+                Jt_H_J = torch.mean(Jt_H_J, dim=0)
+                return Jt_H_J
 
 class ContrastiveHessianCalculator(HessianCalculator):
     """

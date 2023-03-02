@@ -71,6 +71,7 @@ class Linear(AbstractJacobian, nn.Linear):
         if wrt == "input":
             return torch.einsum("kj,bji->bki", self.weight, matrix)
         elif wrt == "weight":
+            #TODO
             jacobian = self._jacobian_wrt_weight(x, val)
             return torch.einsum("bij,bjk->bik", jacobian, matrix)
 
@@ -83,8 +84,43 @@ class Linear(AbstractJacobian, nn.Linear):
         if wrt == "input":
             return torch.einsum("bij,jk->bik", matrix, self.weight)
         elif wrt == "weight":
+            #TODO
             jacobian = self._jacobian_wrt_weight(x, val)
             return torch.einsum("bij,bjk->bik", matrix, jacobian)
+
+    def _jmjTp(
+        self,
+        x: Tensor,
+        val: Union[Tensor, None],
+        matrix: Union[Tensor, None],
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ) -> Union[Tensor, Tuple]:
+        """
+        jacobian matrix jacobian.T product
+        """
+        if matrix is None:
+            matrix = torch.ones_like(x)
+            from_diag = True
+        if val is None:
+            val = self.forward(x)
+        if wrt == "input":
+            if not from_diag and not to_diag:
+                # full -> full
+                return torch.einsum("mn,bnj,kj->bmk", self.weight, matrix, self.weight)
+            elif from_diag and not to_diag:
+                # diag -> full
+                return torch.einsum("mn,bn,kn->bmk", self.weight, matrix, self.weight)
+            elif not from_diag and to_diag:
+                # full -> diag
+                return torch.einsum("mn,bnj,mj->bm", self.weight, matrix, self.weight)
+            elif from_diag and to_diag:
+                # diag -> diag
+                return torch.einsum("mn,bn,mn->bm", self.weight, matrix, self.weight)
+        elif wrt == "weight":
+            raise NotImplementedError
 
     def _jTmjp(
         self,

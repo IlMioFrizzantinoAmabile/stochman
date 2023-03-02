@@ -85,6 +85,44 @@ class L2Norm(AbstractJacobian, nn.Module):
         elif wrt == "weight":
             return None
 
+    def _jmjTp(
+        self,
+        x: Tensor,
+        val: Union[Tensor, None],
+        matrix: Union[Tensor, None],
+        wrt: str = "input",
+        from_diag: bool = False,
+        to_diag: bool = False,
+        diag_backprop: bool = False,
+    ) -> Union[Tensor, Tuple]:
+        """
+        jacobian matrix jacobian.T product
+        """
+        if matrix is None:
+            matrix = torch.ones_like(x)
+            from_diag = True
+        if val is None:
+            val = self.forward(x)
+        if wrt == "input":
+            if not from_diag and not to_diag:
+                # full -> full
+                jacobian = self._jacobian(x, val)
+                return torch.einsum("bji,bik,blk->bjl", jacobian, matrix, jacobian)
+            elif from_diag and not to_diag:
+                # diag -> full
+                jacobian = self._jacobian(x, val)
+                return torch.einsum("bji,bi,bli->bjl", jacobian, matrix, jacobian)
+            elif not from_diag and to_diag:
+                # full -> diag
+                jacobian = self._jacobian(x, val)
+                return torch.einsum("bji,bik,bjk->bj", jacobian, matrix, jacobian)
+            elif from_diag and to_diag:
+                # diag -> diag
+                jacobian = self._jacobian(x, val)
+                return torch.einsum("bji,bi,bji->bj", jacobian, matrix, jacobian)
+        elif wrt == "weight":
+            raise NotImplementedError
+
     def _jTmjp(
         self,
         x: Tensor,
