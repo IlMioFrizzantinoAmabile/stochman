@@ -286,10 +286,10 @@ class CEHessianCalculator(HessianCalculator):
                     diag_backprop=self.speed == "fast",
                 )
                 # backpropagate through the network the outer product  
-                if save_memory:
+                if save_memory is True:
                     Jt_outer_J = torch.zeros_like(Jt_diag_J)
                     for point in range(p):
-                        vector = torch.zeros(b,p*c)
+                        vector = torch.zeros(b,p*c, device=val.device)
                         vector[:, point*c : (point+1)*c] = softmax[:, point, :]
                         softmax_J = nnj_module._vjp(
                             x,
@@ -301,7 +301,7 @@ class CEHessianCalculator(HessianCalculator):
                             Jt_outer_J += torch.einsum("bi,bi->bi", softmax_J, softmax_J)
                         else:
                             Jt_outer_J += torch.einsum("bi,bj->bij", softmax_J, softmax_J)
-                else:
+                elif save_memory is False:
                     pos_identity = torch.diag_embed(torch.ones(p, device=val.device))
                     matrix = torch.einsum("bpi,pq->bpqi", softmax, pos_identity).reshape(b, p, p*c)
                     softmax_J = nnj_module._mjp(
@@ -314,6 +314,28 @@ class CEHessianCalculator(HessianCalculator):
                         Jt_outer_J = torch.einsum("bki,bki->bi", softmax_J, softmax_J)
                     else:
                         Jt_outer_J = torch.einsum("bki,bkj->bij", softmax_J, softmax_J)
+                else:
+                    Jt_outer_J = torch.zeros_like(Jt_diag_J)
+                    batch_size = int(p/save_memory)
+                    assert batch_size == p/save_memory
+                    pos_identity = torch.diag_embed(torch.ones(batch_size, device=val.device))
+                    for batch_n in range(save_memory):
+                        matrix = torch.einsum("bpi,pq->bpqi", 
+                                            softmax[:,batch_n*batch_size:(batch_n+1)*batch_size,:], 
+                                            pos_identity).reshape(b, batch_size, batch_size*c)
+                        matrix = torch.cat([torch.zeros(b, batch_size, (batch_n*batch_size)*c, device=val.device),
+                                            matrix,
+                                            torch.zeros(b, batch_size, ((save_memory-batch_n-1)*batch_size)*c, device=val.device)], dim=2)
+                        softmax_J = nnj_module._mjp(
+                            x,
+                            val,
+                            matrix,
+                            wrt=self.wrt
+                        )
+                        if self.shape == "diagonal":
+                            Jt_outer_J += torch.einsum("bki,bki->bi", softmax_J, softmax_J)
+                        else:
+                            Jt_outer_J += torch.einsum("bki,bkj->bij", softmax_J, softmax_J)
 
                 # add the backpropagated quantities
                 Jt_H_J = Jt_diag_J - Jt_outer_J
