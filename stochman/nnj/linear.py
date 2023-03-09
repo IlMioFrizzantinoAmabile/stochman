@@ -84,9 +84,17 @@ class Linear(AbstractJacobian, nn.Linear):
         if wrt == "input":
             return torch.einsum("bij,jk->bik", matrix, self.weight)
         elif wrt == "weight":
-            #TODO
-            jacobian = self._jacobian_wrt_weight(x, val)
-            return torch.einsum("bij,bjk->bik", matrix, jacobian)
+            #TODO check this!
+            #jacobian = self._jacobian_wrt_weight(x, val)
+            #return torch.einsum("bij,bjk->bik", matrix, jacobian)
+            b, l = x.shape
+            r = matrix.shape[1]
+            assert x.shape[0]==matrix.shape[0]
+            if self.bias is None:
+                return torch.einsum("bri,bj->brij", matrix, x).view(b, r, -1)
+            else:
+                return torch.cat([torch.einsum("bri,bj->brij", matrix, x).view(b, r, -1), 
+                                  matrix], dim=2)
 
     def _jmjTp(
         self,
