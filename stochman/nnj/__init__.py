@@ -11,6 +11,7 @@ from stochman.nnj.skipconnection import SkipConnection
 ### parametric layers ###
 from stochman.nnj.linear import Linear #jmp, mjp, jTmjp-to-full non optimal wrt weights
 from stochman.nnj.poslinear import PosLinear
+from stochman.nnj.linear_multihead import Linear_multihead
 from stochman.nnj.conv1d import Conv1d
 from stochman.nnj.conv2d import Conv2d
 from stochman.nnj.conv3d import Conv3d
